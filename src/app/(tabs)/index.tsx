@@ -7,10 +7,17 @@ import { ListingCard } from '@/components/listing-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
+import { useFavoriteToggle } from '@/hooks/use-favorite-toggle';
+import { useAuth } from '@/providers/auth-provider';
+import { getFavoritedListingIds } from '@/services/favorites';
 import { getAvailableListings, type Listing } from '@/services/listings';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { session } = useAuth();
+  const userId = session?.user.id;
+  const { favoritedIds, setFavoritedIds, toggleFavorite } = useFavoriteToggle(userId);
+
   const [listings, setListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -24,7 +31,12 @@ export default function HomeScreen() {
       setErrorMessage(null);
       setListings(data);
     }
-  }, []);
+
+    if (userId) {
+      const { data: favoriteIds } = await getFavoritedListingIds(userId);
+      setFavoritedIds(new Set(favoriteIds));
+    }
+  }, [userId, setFavoritedIds]);
 
   useEffect(() => {
     setIsLoading(true);
@@ -64,7 +76,12 @@ export default function HomeScreen() {
             columnWrapperStyle={styles.row}
             contentContainerStyle={styles.listContent}
             renderItem={({ item }) => (
-              <ListingCard listing={item} onPress={() => router.push(`/listing/${item.id}`)} />
+              <ListingCard
+                listing={item}
+                onPress={() => router.push(`/listing/${item.id}`)}
+                isFavorited={favoritedIds.has(item.id)}
+                onToggleFavorite={() => toggleFavorite(item.id)}
+              />
             )}
             refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
           />

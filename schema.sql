@@ -28,3 +28,11 @@ create table public.listings (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create table public.favorites (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  listing_id uuid not null references public.listings(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  unique (user_id, listing_id)
+);

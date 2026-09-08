@@ -16,9 +16,11 @@ const priceFormatter = new Intl.NumberFormat('en-US', {
 type ListingCardProps = {
   listing: Listing;
   onPress?: () => void;
+  isFavorited?: boolean;
+  onToggleFavorite?: () => void;
 };
 
-export function ListingCard({ listing, onPress }: ListingCardProps) {
+export function ListingCard({ listing, onPress, isFavorited, onToggleFavorite }: ListingCardProps) {
   const theme = useTheme();
 
   return (
@@ -29,10 +31,14 @@ export function ListingCard({ listing, onPress }: ListingCardProps) {
           tintColor={theme.textSecondary}
           size={28}
         />
-        <Pressable style={styles.favoriteButton} hitSlop={8}>
+        <Pressable onPress={onToggleFavorite} style={styles.favoriteButton} hitSlop={8}>
           <View style={styles.favoriteBubble}>
             <SymbolView
-              name={{ ios: 'heart', android: 'favorite_border', web: 'favorite_border' }}
+              name={
+                isFavorited
+                  ? { ios: 'heart.fill', android: 'favorite', web: 'favorite' }
+                  : { ios: 'heart', android: 'favorite_border', web: 'favorite_border' }
+              }
               tintColor="#ffffff"
               size={18}
             />

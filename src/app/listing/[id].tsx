@@ -8,6 +8,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useAuth } from '@/providers/auth-provider';
+import { addFavorite, getFavoritedListingIds, removeFavorite } from '@/services/favorites';
 import { getListingById, type ListingDetail } from '@/services/listings';
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
@@ -21,10 +23,13 @@ export default function ListingDetailScreen() {
   const router = useRouter();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const { session } = useAuth();
+  const userId = session?.user.id;
 
   const [listing, setListing] = useState<ListingDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isFavorited, setIsFavorited] = useState(false);
 
   const loadListing = useCallback(async () => {
     if (!id) return;
@@ -43,6 +48,25 @@ export default function ListingDetailScreen() {
     loadListing();
   }, [loadListing]);
 
+  useEffect(() => {
+    if (!id || !userId) return;
+    getFavoritedListingIds(userId).then(({ data }) => {
+      setIsFavorited(data.includes(id));
+    });
+  }, [id, userId]);
+
+  const handleToggleFavorite = async () => {
+    if (!id || !userId) return;
+    const wasFavorited = isFavorited;
+    setIsFavorited(!wasFavorited);
+
+    const { error } = wasFavorited ? await removeFavorite(userId, id) : await addFavorite(userId, id);
+    if (error) {
+      console.error('handleToggleFavorite: failed to update favorite', error);
+      setIsFavorited(wasFavorited);
+    }
+  };
+
   const headerButtons = (
     <View style={[styles.headerButtons, { top: insets.top + Spacing.two }]}>
       <Pressable onPress={() => router.back()} hitSlop={8}>
@@ -54,10 +78,14 @@ export default function ListingDetailScreen() {
           />
         </View>
       </Pressable>
-      <Pressable hitSlop={8}>
+      <Pressable onPress={handleToggleFavorite} hitSlop={8}>
         <View style={styles.iconBubble}>
           <SymbolView
-            name={{ ios: 'heart', android: 'favorite_border', web: 'favorite_border' }}
+            name={
+              isFavorited
+                ? { ios: 'heart.fill', android: 'favorite', web: 'favorite' }
+                : { ios: 'heart', android: 'favorite_border', web: 'favorite_border' }
+            }
             tintColor="#ffffff"
             size={20}
           />
