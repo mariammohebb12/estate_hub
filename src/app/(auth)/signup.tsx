@@ -1,18 +1,40 @@
 import { Link } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, TextInput } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { signUpWithEmail } from '@/services/auth';
 
 export default function SignupScreen() {
   const theme = useTheme();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleSignup = async () => {
+    if (!name || !email || !password) {
+      setErrorMessage('Fill in your name, email, and password.');
+      return;
+    }
+
+    setErrorMessage(null);
+    setIsSubmitting(true);
+    const { error } = await signUpWithEmail({ name, email, password });
+    setIsSubmitting(false);
+
+    if (error) {
+      setErrorMessage(error.message);
+    }
+    // On success, AuthProvider picks up the new session and routes into the tabs
+    // (unless the project requires email confirmation, in which case there's no
+    // session yet and the user stays here until they confirm).
+  };
 
   return (
     <ThemedView style={styles.container}>
@@ -32,6 +54,7 @@ export default function SignupScreen() {
             placeholderTextColor={theme.textSecondary}
             value={name}
             onChangeText={setName}
+            editable={!isSubmitting}
             style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
           />
           <TextInput
@@ -41,6 +64,7 @@ export default function SignupScreen() {
             keyboardType="email-address"
             value={email}
             onChangeText={setEmail}
+            editable={!isSubmitting}
             style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
           />
           <TextInput
@@ -49,11 +73,25 @@ export default function SignupScreen() {
             secureTextEntry
             value={password}
             onChangeText={setPassword}
+            editable={!isSubmitting}
             style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
           />
 
-          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
-            <ThemedText style={styles.primaryButtonText}>Sign Up</ThemedText>
+          {errorMessage ? <ThemedText style={styles.errorText}>{errorMessage}</ThemedText> : null}
+
+          <Pressable
+            onPress={handleSignup}
+            disabled={isSubmitting}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              pressed && styles.pressed,
+              isSubmitting && styles.disabled,
+            ]}>
+            {isSubmitting ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <ThemedText style={styles.primaryButtonText}>Sign Up</ThemedText>
+            )}
           </Pressable>
         </ThemedView>
 
@@ -94,6 +132,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     fontSize: 16,
   },
+  errorText: {
+    color: '#D92D20',
+  },
   primaryButton: {
     height: 52,
     borderRadius: Spacing.three,
@@ -108,6 +149,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.85,
+  },
+  disabled: {
+    opacity: 0.7,
   },
   footer: {
     flexDirection: 'row',

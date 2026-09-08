@@ -1,17 +1,37 @@
 import { Link } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, TextInput } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { signInWithEmail } from '@/services/auth';
 
 export default function LoginScreen() {
   const theme = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleLogin = async () => {
+    if (!email || !password) {
+      setErrorMessage('Enter your email and password.');
+      return;
+    }
+
+    setErrorMessage(null);
+    setIsSubmitting(true);
+    const { error } = await signInWithEmail({ email, password });
+    setIsSubmitting(false);
+
+    if (error) {
+      setErrorMessage(error.message);
+    }
+    // On success, AuthProvider picks up the new session and routes into the tabs.
+  };
 
   return (
     <ThemedView style={styles.container}>
@@ -33,6 +53,7 @@ export default function LoginScreen() {
             keyboardType="email-address"
             value={email}
             onChangeText={setEmail}
+            editable={!isSubmitting}
             style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
           />
           <TextInput
@@ -41,11 +62,25 @@ export default function LoginScreen() {
             secureTextEntry
             value={password}
             onChangeText={setPassword}
+            editable={!isSubmitting}
             style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
           />
 
-          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
-            <ThemedText style={styles.primaryButtonText}>Log In</ThemedText>
+          {errorMessage ? <ThemedText style={styles.errorText}>{errorMessage}</ThemedText> : null}
+
+          <Pressable
+            onPress={handleLogin}
+            disabled={isSubmitting}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              pressed && styles.pressed,
+              isSubmitting && styles.disabled,
+            ]}>
+            {isSubmitting ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <ThemedText style={styles.primaryButtonText}>Log In</ThemedText>
+            )}
           </Pressable>
         </ThemedView>
 
@@ -86,6 +121,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     fontSize: 16,
   },
+  errorText: {
+    color: '#D92D20',
+  },
   primaryButton: {
     height: 52,
     borderRadius: Spacing.three,
@@ -100,6 +138,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.85,
+  },
+  disabled: {
+    opacity: 0.7,
   },
   footer: {
     flexDirection: 'row',
