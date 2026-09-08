@@ -39,3 +39,13 @@ export async function signOut() {
   const { error } = await supabase.auth.signOut();
   return { error };
 }
+
+export async function verifyPassword(email: string, password: string) {
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  return { error };
+}
+
+export async function updatePassword(newPassword: string) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  return { error };
+}
