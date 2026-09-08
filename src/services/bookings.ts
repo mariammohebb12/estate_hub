@@ -37,7 +37,28 @@ export async function bookSlot({ slotId, listingId, buyerId }: BookSlotParams) {
   if (claimError) {
     return { error: claimError.message };
   }
+
   if (!claimedSlot) {
+    // The update matched 0 rows. That's genuinely "someone else booked it
+    // first" only if a fresh read shows is_booked = true. If it still reads
+    // false, something else (most likely a missing RLS UPDATE policy/grant
+    // on availability_slots) is silently blocking the update from affecting
+    // any rows, rather than a real booking race.
+    const { data: currentSlot, error: readError } = await supabase
+      .from('availability_slots')
+      .select('is_booked')
+      .eq('id', slotId)
+      .maybeSingle();
+
+    if (!readError && currentSlot && currentSlot.is_booked === false) {
+      console.error(
+        'bookSlot: update matched 0 rows even though is_booked is still false for slot',
+        slotId,
+        '— check for a missing UPDATE policy/grant on availability_slots.',
+      );
+      return { error: 'not_permitted' as const };
+    }
+
     return { error: 'slot_taken' as const };
   }
 

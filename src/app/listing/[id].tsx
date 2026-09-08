@@ -115,13 +115,15 @@ export default function ListingDetailScreen() {
     const { error } = await bookSlot({ slotId: selectedSlotId, listingId: id, buyerId: userId });
 
     if (error) {
-      setBookingError(
-        error === 'slot_taken'
-          ? 'That time was just booked by someone else. Pick another time.'
-          : error,
-      );
-      setSelectedSlotId(null);
-      await loadSlots();
+      if (error === 'slot_taken') {
+        setBookingError('That time was just booked by someone else. Pick another time.');
+        setSelectedSlotId(null);
+        await loadSlots();
+      } else if (error === 'not_permitted') {
+        setBookingError("Couldn't book this slot right now — please try again in a moment.");
+      } else {
+        setBookingError(error);
+      }
     } else {
       setConfirmedSlot(bookedSlot);
       setSelectedSlotId(null);
@@ -148,19 +150,6 @@ export default function ListingDetailScreen() {
         <View style={styles.iconBubble}>
           <SymbolView
             name={{ ios: 'chevron.left', android: 'chevron_left', web: 'chevron_left' }}
-            tintColor="#ffffff"
-            size={20}
-          />
-        </View>
-      </Pressable>
-      <Pressable onPress={handleToggleFavorite} hitSlop={8}>
-        <View style={styles.iconBubble}>
-          <SymbolView
-            name={
-              isFavorited
-                ? { ios: 'heart.fill', android: 'favorite', web: 'favorite' }
-                : { ios: 'heart', android: 'favorite_border', web: 'favorite_border' }
-            }
             tintColor="#ffffff"
             size={20}
           />
@@ -213,6 +202,11 @@ export default function ListingDetailScreen() {
             tintColor={theme.textSecondary}
             size={40}
           />
+          <View style={[styles.photoTypeBadge, { top: insets.top + Spacing.two + 36 + Spacing.two }]}>
+            <ThemedText type="small" style={styles.photoTypeBadgeText}>
+              {listing.listing_type === 'rent' ? 'For Rent' : 'For Sale'}
+            </ThemedText>
+          </View>
           <View style={styles.photoDots}>
             <View style={styles.photoDot} />
           </View>
@@ -220,13 +214,22 @@ export default function ListingDetailScreen() {
 
         <ThemedView style={styles.content}>
           <ThemedView style={styles.titleBlock}>
-            <ThemedView
-              style={[styles.typeBadge, { backgroundColor: theme.backgroundElement }]}>
-              <ThemedText type="small" themeColor="textSecondary">
-                {listing.listing_type === 'rent' ? 'For Rent' : 'For Sale'}
+            <View style={styles.titleRow}>
+              <ThemedText type="subtitle" style={styles.titleText}>
+                {listing.title}
               </ThemedText>
-            </ThemedView>
-            <ThemedText type="subtitle">{listing.title}</ThemedText>
+              <Pressable onPress={handleToggleFavorite} hitSlop={8}>
+                <SymbolView
+                  name={
+                    isFavorited
+                      ? { ios: 'heart.fill', android: 'favorite', web: 'favorite' }
+                      : { ios: 'heart', android: 'favorite_border', web: 'favorite_border' }
+                  }
+                  tintColor={isFavorited ? theme.text : theme.textSecondary}
+                  size={24}
+                />
+              </Pressable>
+            </View>
             <ThemedText type="title" style={styles.price}>
               {priceFormatter.format(listing.price)}
               {listing.listing_type === 'rent' ? (
@@ -420,6 +423,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  photoTypeBadge: {
+    position: 'absolute',
+    left: Spacing.three,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+    borderRadius: Spacing.five,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  photoTypeBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    lineHeight: 14,
+  },
   photoDots: {
     position: 'absolute',
     bottom: Spacing.three,
@@ -440,12 +456,14 @@ const styles = StyleSheet.create({
   titleBlock: {
     gap: Spacing.one,
   },
-  typeBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.half,
-    borderRadius: Spacing.five,
-    marginBottom: Spacing.half,
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  titleText: {
+    flex: 1,
   },
   price: {
     fontSize: 24,

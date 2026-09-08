@@ -36,25 +36,25 @@ export function ListingCard({ listing, onPress, isFavorited, onToggleFavorite }:
             {listing.listing_type === 'rent' ? 'For Rent' : 'For Sale'}
           </ThemedText>
         </View>
-        <Pressable onPress={onToggleFavorite} style={styles.favoriteButton} hitSlop={8}>
-          <View style={styles.favoriteBubble}>
+      </View>
+
+      <ThemedView style={styles.info}>
+        <View style={styles.titleRow}>
+          <ThemedText type="smallBold" numberOfLines={1} style={styles.titleText}>
+            {listing.title}
+          </ThemedText>
+          <Pressable onPress={onToggleFavorite} hitSlop={8}>
             <SymbolView
               name={
                 isFavorited
                   ? { ios: 'heart.fill', android: 'favorite', web: 'favorite' }
                   : { ios: 'heart', android: 'favorite_border', web: 'favorite_border' }
               }
-              tintColor="#ffffff"
+              tintColor={isFavorited ? theme.text : theme.textSecondary}
               size={18}
             />
-          </View>
-        </Pressable>
-      </View>
-
-      <ThemedView style={styles.info}>
-        <ThemedText type="smallBold" numberOfLines={1}>
-          {listing.title}
-        </ThemedText>
+          </Pressable>
+        </View>
         <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
           {listing.location_text}
         </ThemedText>
@@ -92,20 +92,16 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
   },
-  favoriteButton: {
-    position: 'absolute',
-    top: Spacing.two,
-    right: Spacing.two,
-  },
-  favoriteBubble: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   info: {
     gap: Spacing.half,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  titleText: {
+    flex: 1,
   },
 });
