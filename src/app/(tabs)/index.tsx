@@ -142,7 +142,7 @@ export default function HomeScreen() {
               size={18}
             />
             <TextInput
-              placeholder="Describe what you're looking for..."
+              placeholder="Ask AI to find your perfect home..."
               placeholderTextColor={theme.textSecondary}
               value={aiQuery}
               onChangeText={setAiQuery}
