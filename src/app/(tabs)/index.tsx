@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,6 +10,7 @@ import { Spacing } from '@/constants/theme';
 import { getAvailableListings, type Listing } from '@/services/listings';
 
 export default function HomeScreen() {
+  const router = useRouter();
   const [listings, setListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -61,7 +63,9 @@ export default function HomeScreen() {
             numColumns={2}
             columnWrapperStyle={styles.row}
             contentContainerStyle={styles.listContent}
-            renderItem={({ item }) => <ListingCard listing={item} />}
+            renderItem={({ item }) => (
+              <ListingCard listing={item} onPress={() => router.push(`/listing/${item.id}`)} />
+            )}
             refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
           />
         )}

@@ -15,13 +15,14 @@ const priceFormatter = new Intl.NumberFormat('en-US', {
 
 type ListingCardProps = {
   listing: Listing;
+  onPress?: () => void;
 };
 
-export function ListingCard({ listing }: ListingCardProps) {
+export function ListingCard({ listing, onPress }: ListingCardProps) {
   const theme = useTheme();
 
   return (
-    <Pressable style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
       <View style={[styles.photo, { backgroundColor: theme.backgroundElement }]}>
         <SymbolView
           name={{ ios: 'photo', android: 'photo', web: 'photo' }}
