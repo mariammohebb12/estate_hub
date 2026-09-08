@@ -22,6 +22,7 @@ export async function signUpWithEmail({ name, email, password }: SignUpParams) {
       .from('profiles')
       .insert({ id: data.user.id, full_name: name });
     if (profileError) {
+      console.error('signUpWithEmail: failed to insert profile row', profileError);
       return { error: profileError };
     }
   }
