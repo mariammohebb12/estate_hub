@@ -20,7 +20,7 @@ export async function signUpWithEmail({ name, email, password }: SignUpParams) {
   if (data.user) {
     const { error: profileError } = await supabase
       .from('profiles')
-      .insert({ id: data.user.id, name, email });
+      .insert({ id: data.user.id, full_name: name });
     if (profileError) {
       return { error: profileError };
     }
