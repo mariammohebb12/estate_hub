@@ -25,12 +25,33 @@ export type ListingDetail = {
   amenities: string[] | null;
 };
 
-export async function getAvailableListings() {
-  const { data, error } = await supabase
-    .from('listings')
-    .select('id, title, location_text, price, status, created_at')
-    .eq('status', 'available')
-    .order('created_at', { ascending: false });
+export const PROPERTY_TYPES = ['villa', 'apartment', 'house'] as const;
+export type PropertyType = (typeof PROPERTY_TYPES)[number];
+
+export type ListingFilters = {
+  minBedrooms?: number;
+  minPrice?: number;
+  maxPrice?: number;
+  propertyType?: PropertyType;
+};
+
+export async function getAvailableListings(filters: ListingFilters = {}) {
+  let query = supabase.from('listings').select('id, title, location_text, price, status, created_at').eq('status', 'available');
+
+  if (filters.minBedrooms != null) {
+    query = query.gte('bedrooms', filters.minBedrooms);
+  }
+  if (filters.minPrice != null) {
+    query = query.gte('price', filters.minPrice);
+  }
+  if (filters.maxPrice != null) {
+    query = query.lte('price', filters.maxPrice);
+  }
+  if (filters.propertyType) {
+    query = query.eq('property_type', filters.propertyType);
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false });
 
   return { data: (data as Listing[] | null) ?? [], error };
 }
