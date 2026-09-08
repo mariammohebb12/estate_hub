@@ -89,8 +89,8 @@ export default function ListingDetailScreen() {
   }
 
   const stats = [
-    listing.bedrooms != null ? `${listing.bedrooms} bd` : null,
-    listing.bathrooms != null ? `${listing.bathrooms} ba` : null,
+    listing.bedrooms != null ? `${listing.bedrooms} Bedrooms` : null,
+    listing.bathrooms != null ? `${listing.bathrooms} Bathrooms` : null,
     listing.property_type,
   ].filter((stat): stat is string => Boolean(stat));
 
