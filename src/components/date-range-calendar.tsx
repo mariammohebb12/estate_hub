@@ -77,6 +77,26 @@ export function DateRangeCalendar({
 
   return (
     <View style={styles.container}>
+      <View style={styles.legend}>
+        <View style={styles.legendItem}>
+          <View
+            style={[
+              styles.legendSwatch,
+              { backgroundColor: theme.background, borderWidth: 1, borderColor: theme.backgroundElement },
+            ]}
+          />
+          <ThemedText type="small" themeColor="textSecondary">
+            Available
+          </ThemedText>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendSwatch, { backgroundColor: theme.backgroundElement }]} />
+          <ThemedText type="small" themeColor="textSecondary">
+            Unavailable
+          </ThemedText>
+        </View>
+      </View>
+
       <View style={styles.header}>
         <Pressable
           onPress={() => canGoPrev && onMonthChange(addMonths(month, -1))}
@@ -128,15 +148,18 @@ export function DateRangeCalendar({
               date.getTime() < rangeEnd.getTime(),
           );
 
-          let backgroundColor: string | undefined;
-          let textColor: string = theme.text;
+          let backgroundColor: string = isAvailable ? theme.background : theme.backgroundElement;
+          let borderColor: string | undefined = isAvailable ? theme.backgroundElement : undefined;
+          let textColor: string = isAvailable ? theme.text : theme.textSecondary;
+
           if (isStart || isEnd) {
             backgroundColor = theme.text;
+            borderColor = undefined;
             textColor = theme.background;
           } else if (isInRange) {
             backgroundColor = theme.backgroundSelected;
-          } else if (!isAvailable) {
-            textColor = theme.textSecondary;
+            borderColor = undefined;
+            textColor = theme.text;
           }
 
           return (
@@ -144,8 +167,12 @@ export function DateRangeCalendar({
               <Pressable
                 onPress={() => onSelectDate(date)}
                 disabled={!isAvailable}
-                style={[styles.day, backgroundColor ? { backgroundColor } : null]}>
-                <ThemedText type="small" style={{ color: textColor }}>
+                style={[
+                  styles.day,
+                  { backgroundColor },
+                  borderColor ? { borderWidth: 1, borderColor } : null,
+                ]}>
+                <ThemedText type={isAvailable ? 'smallBold' : 'small'} style={{ color: textColor }}>
                   {date.getDate()}
                 </ThemedText>
               </Pressable>
@@ -160,6 +187,20 @@ export function DateRangeCalendar({
 const styles = StyleSheet.create({
   container: {
     gap: Spacing.two,
+  },
+  legend: {
+    flexDirection: 'row',
+    gap: Spacing.four,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  legendSwatch: {
+    width: 12,
+    height: 12,
+    borderRadius: 3,
   },
   header: {
     flexDirection: 'row',

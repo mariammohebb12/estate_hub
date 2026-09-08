@@ -414,6 +414,17 @@ export default function ListingDetailScreen() {
                         : `${rangeDateFormatter.format(rangeStart)} — pick a checkout date`}
                     </ThemedText>
                   ) : null}
+
+                  {rangeStart && rangeEnd ? (
+                    <View style={styles.checkTimesRow}>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Check-in: 3:00 PM
+                      </ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Check-out: 11:00 AM
+                      </ThemedText>
+                    </View>
+                  ) : null}
                 </View>
               )}
             </ThemedView>
@@ -573,6 +584,11 @@ const styles = StyleSheet.create({
   },
   slotError: {
     marginBottom: Spacing.two,
+  },
+  checkTimesRow: {
+    flexDirection: 'row',
+    gap: Spacing.four,
+    marginTop: Spacing.one,
   },
   slotsList: {
     gap: Spacing.two,
