@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -8,7 +8,31 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { PROPERTY_TYPES, type ListingFilters, type PropertyType } from '@/services/listings';
 
-const BEDROOM_OPTIONS = [1, 2, 3, 4];
+const BEDROOM_OPTIONS: { label: string; value: number | undefined }[] = [
+  { label: 'Any', value: undefined },
+  { label: '1+', value: 1 },
+  { label: '2+', value: 2 },
+  { label: '3+', value: 3 },
+  { label: '4+', value: 4 },
+];
+
+const PRICE_BRACKETS: { label: string; min: number | undefined; max: number | undefined }[] = [
+  { label: 'Any', min: undefined, max: undefined },
+  { label: 'Under $100k', min: undefined, max: 100000 },
+  { label: '$100k–300k', min: 100000, max: 300000 },
+  { label: '$300k–500k', min: 300000, max: 500000 },
+  { label: '$500k+', min: 500000, max: undefined },
+];
+
+const PROPERTY_TYPE_OPTIONS: { label: string; value: PropertyType | undefined }[] = [
+  { label: 'Any', value: undefined },
+  ...PROPERTY_TYPES.map((type) => ({ label: type[0].toUpperCase() + type.slice(1), value: type })),
+];
+
+function findPriceBracketIndex(minPrice?: number, maxPrice?: number) {
+  const index = PRICE_BRACKETS.findIndex((bracket) => bracket.min === minPrice && bracket.max === maxPrice);
+  return index === -1 ? 0 : index;
+}
 
 type FilterModalProps = {
   visible: boolean;
@@ -21,32 +45,32 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
   const theme = useTheme();
 
   const [minBedrooms, setMinBedrooms] = useState<number | undefined>(filters.minBedrooms);
-  const [minPrice, setMinPrice] = useState(filters.minPrice != null ? String(filters.minPrice) : '');
-  const [maxPrice, setMaxPrice] = useState(filters.maxPrice != null ? String(filters.maxPrice) : '');
+  const [priceBracketIndex, setPriceBracketIndex] = useState(
+    findPriceBracketIndex(filters.minPrice, filters.maxPrice),
+  );
   const [propertyType, setPropertyType] = useState<PropertyType | undefined>(filters.propertyType);
 
   useEffect(() => {
     if (visible) {
       setMinBedrooms(filters.minBedrooms);
-      setMinPrice(filters.minPrice != null ? String(filters.minPrice) : '');
-      setMaxPrice(filters.maxPrice != null ? String(filters.maxPrice) : '');
+      setPriceBracketIndex(findPriceBracketIndex(filters.minPrice, filters.maxPrice));
       setPropertyType(filters.propertyType);
     }
   }, [visible, filters]);
 
   const handleApply = () => {
+    const bracket = PRICE_BRACKETS[priceBracketIndex];
     onApply({
       minBedrooms,
-      minPrice: minPrice ? Number(minPrice) : undefined,
-      maxPrice: maxPrice ? Number(maxPrice) : undefined,
+      minPrice: bracket.min,
+      maxPrice: bracket.max,
       propertyType,
     });
   };
 
   const handleClear = () => {
     setMinBedrooms(undefined);
-    setMinPrice('');
-    setMaxPrice('');
+    setPriceBracketIndex(0);
     setPropertyType(undefined);
     onApply({});
   };
@@ -54,10 +78,7 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.sheetContainer}
-        pointerEvents="box-none">
+      <View style={styles.sheetContainer} pointerEvents="box-none">
         <ThemedView style={[styles.sheet, { backgroundColor: theme.background }]}>
           <View style={styles.header}>
             <ThemedText type="subtitle">Filters</ThemedText>
@@ -73,22 +94,20 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
           </View>
 
           <ThemedView style={styles.section}>
-            <ThemedText type="smallBold">Bedrooms (min)</ThemedText>
+            <ThemedText type="smallBold">Bedrooms</ThemedText>
             <View style={styles.pillRow}>
               {BEDROOM_OPTIONS.map((option) => {
-                const selected = minBedrooms === option;
+                const selected = minBedrooms === option.value;
                 return (
                   <Pressable
-                    key={option}
-                    onPress={() => setMinBedrooms(selected ? undefined : option)}
+                    key={option.label}
+                    onPress={() => setMinBedrooms(option.value)}
                     style={[
                       styles.pill,
                       { backgroundColor: selected ? theme.text : theme.backgroundElement },
                     ]}>
-                    <ThemedText
-                      type="small"
-                      style={{ color: selected ? theme.background : theme.text }}>
-                      {option}+
+                    <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
+                      {option.label}
                     </ThemedText>
                   </Pressable>
                 );
@@ -98,44 +117,41 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
 
           <ThemedView style={styles.section}>
             <ThemedText type="smallBold">Price range</ThemedText>
-            <View style={styles.priceRow}>
-              <TextInput
-                value={minPrice}
-                onChangeText={setMinPrice}
-                placeholder="Min"
-                placeholderTextColor={theme.textSecondary}
-                keyboardType="number-pad"
-                style={[styles.priceInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-              />
-              <ThemedText themeColor="textSecondary">to</ThemedText>
-              <TextInput
-                value={maxPrice}
-                onChangeText={setMaxPrice}
-                placeholder="Max"
-                placeholderTextColor={theme.textSecondary}
-                keyboardType="number-pad"
-                style={[styles.priceInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-              />
+            <View style={styles.pillRow}>
+              {PRICE_BRACKETS.map((bracket, index) => {
+                const selected = priceBracketIndex === index;
+                return (
+                  <Pressable
+                    key={bracket.label}
+                    onPress={() => setPriceBracketIndex(index)}
+                    style={[
+                      styles.pill,
+                      { backgroundColor: selected ? theme.text : theme.backgroundElement },
+                    ]}>
+                    <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
+                      {bracket.label}
+                    </ThemedText>
+                  </Pressable>
+                );
+              })}
             </View>
           </ThemedView>
 
           <ThemedView style={styles.section}>
             <ThemedText type="smallBold">Property type</ThemedText>
             <View style={styles.pillRow}>
-              {PROPERTY_TYPES.map((option) => {
-                const selected = propertyType === option;
+              {PROPERTY_TYPE_OPTIONS.map((option) => {
+                const selected = propertyType === option.value;
                 return (
                   <Pressable
-                    key={option}
-                    onPress={() => setPropertyType(selected ? undefined : option)}
+                    key={option.label}
+                    onPress={() => setPropertyType(option.value)}
                     style={[
                       styles.pill,
                       { backgroundColor: selected ? theme.text : theme.backgroundElement },
                     ]}>
-                    <ThemedText
-                      type="small"
-                      style={{ color: selected ? theme.background : theme.text, textTransform: 'capitalize' }}>
-                      {option}
+                    <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
+                      {option.label}
                     </ThemedText>
                   </Pressable>
                 );
@@ -154,7 +170,7 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
             </Pressable>
           </View>
         </ThemedView>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -173,14 +189,6 @@ const styles = StyleSheet.create({
   section: { gap: Spacing.two },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
   pill: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, borderRadius: Spacing.five },
-  priceRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  priceInput: {
-    flex: 1,
-    height: 44,
-    borderRadius: Spacing.three,
-    paddingHorizontal: Spacing.three,
-    fontSize: 16,
-  },
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: Spacing.two },
   clearButton: { paddingVertical: Spacing.two },
   applyButton: {
