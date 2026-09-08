@@ -142,7 +142,7 @@ export default function HomeScreen() {
               size={18}
             />
             <TextInput
-              placeholder="Try “modern 2 bedroom near the beach”"
+              placeholder="Describe what you're looking for..."
               placeholderTextColor={theme.textSecondary}
               value={aiQuery}
               onChangeText={setAiQuery}
