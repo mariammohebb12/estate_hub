@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { DateRangeCalendar, dateCoveredBySlot, isSameDay, startOfMonth } from '@/components/date-range-calendar';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -37,6 +38,8 @@ function formatSlotLabel(slot: AvailabilitySlot) {
   return `${slotDateFormatter.format(start)}, ${slotTimeFormatter.format(start)}–${slotTimeFormatter.format(end)}`;
 }
 
+const rangeDateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+
 export default function ListingDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -57,6 +60,10 @@ export default function ListingDetailScreen() {
   const [isBooking, setIsBooking] = useState(false);
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [confirmedSlot, setConfirmedSlot] = useState<AvailabilitySlot | null>(null);
+
+  const [calendarMonth, setCalendarMonth] = useState(() => startOfMonth(new Date()));
+  const [rangeStart, setRangeStart] = useState<Date | null>(null);
+  const [rangeEnd, setRangeEnd] = useState<Date | null>(null);
 
   const loadListing = useCallback(async () => {
     if (!id) return;
@@ -96,14 +103,48 @@ export default function ListingDetailScreen() {
   }, [id]);
 
   useEffect(() => {
-    if (listing?.listing_type === 'buy') {
+    if (listing) {
       loadSlots();
     }
-  }, [listing?.listing_type, loadSlots]);
+  }, [listing, loadSlots]);
 
   const handleSelectSlot = (slotId: string) => {
     setBookingError(null);
     setSelectedSlotId((prev) => (prev === slotId ? null : slotId));
+  };
+
+  const handleSelectDate = (date: Date) => {
+    setBookingError(null);
+    const coveringSlot = slots.find((slot) => dateCoveredBySlot(date, slot));
+    if (!coveringSlot) return;
+
+    if (!rangeStart || rangeEnd) {
+      setRangeStart(date);
+      setRangeEnd(null);
+      setSelectedSlotId(null);
+      return;
+    }
+
+    if (isSameDay(date, rangeStart)) {
+      setRangeStart(null);
+      setRangeEnd(null);
+      setSelectedSlotId(null);
+      return;
+    }
+
+    const startSlot = slots.find((slot) => dateCoveredBySlot(rangeStart, slot));
+    const [newStart, newEnd] = date.getTime() < rangeStart.getTime() ? [date, rangeStart] : [rangeStart, date];
+
+    if (!startSlot || !dateCoveredBySlot(newStart, startSlot) || !dateCoveredBySlot(newEnd, startSlot)) {
+      setRangeStart(date);
+      setRangeEnd(null);
+      setSelectedSlotId(null);
+      return;
+    }
+
+    setRangeStart(newStart);
+    setRangeEnd(newEnd);
+    setSelectedSlotId(startSlot.id);
   };
 
   const handleConfirmBooking = async () => {
@@ -116,8 +157,14 @@ export default function ListingDetailScreen() {
 
     if (error) {
       if (error === 'slot_taken') {
-        setBookingError('That time was just booked by someone else. Pick another time.');
+        setBookingError(
+          listing?.listing_type === 'rent'
+            ? 'Those dates were just booked by someone else. Pick a different range.'
+            : 'That time was just booked by someone else. Pick another time.',
+        );
         setSelectedSlotId(null);
+        setRangeStart(null);
+        setRangeEnd(null);
         await loadSlots();
       } else if (error === 'not_permitted') {
         setBookingError("Couldn't book this slot right now — please try again in a moment.");
@@ -127,6 +174,8 @@ export default function ListingDetailScreen() {
     } else {
       setConfirmedSlot(bookedSlot);
       setSelectedSlotId(null);
+      setRangeStart(null);
+      setRangeEnd(null);
     }
 
     setIsBooking(false);
@@ -332,6 +381,44 @@ export default function ListingDetailScreen() {
             </ThemedView>
           ) : null}
 
+          {listing.listing_type === 'rent' && !confirmedSlot ? (
+            <ThemedView style={styles.section}>
+              <ThemedText type="smallBold">Select your dates</ThemedText>
+
+              {isLoadingSlots ? (
+                <ActivityIndicator style={styles.slotsSpacing} />
+              ) : slotsError ? (
+                <ThemedText style={[styles.errorText, styles.slotsSpacing]}>{slotsError}</ThemedText>
+              ) : slots.length === 0 ? (
+                <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
+                  No available dates
+                </ThemedText>
+              ) : (
+                <View style={styles.slotsSpacing}>
+                  {bookingError ? (
+                    <ThemedText style={[styles.errorText, styles.slotError]}>{bookingError}</ThemedText>
+                  ) : null}
+                  <DateRangeCalendar
+                    month={calendarMonth}
+                    minMonth={startOfMonth(new Date())}
+                    onMonthChange={setCalendarMonth}
+                    slots={slots}
+                    rangeStart={rangeStart}
+                    rangeEnd={rangeEnd}
+                    onSelectDate={handleSelectDate}
+                  />
+                  {rangeStart ? (
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.slotsSpacing}>
+                      {rangeEnd
+                        ? `${rangeDateFormatter.format(rangeStart)} – ${rangeDateFormatter.format(rangeEnd)}`
+                        : `${rangeDateFormatter.format(rangeStart)} — pick a checkout date`}
+                    </ThemedText>
+                  ) : null}
+                </View>
+              )}
+            </ThemedView>
+          ) : null}
+
           <ThemedView
             style={[styles.agentCard, { backgroundColor: theme.backgroundElement }]}>
             <View style={[styles.avatar, { backgroundColor: theme.backgroundSelected }]}>
@@ -358,7 +445,7 @@ export default function ListingDetailScreen() {
           styles.ctaBar,
           { paddingBottom: insets.bottom + Spacing.two, backgroundColor: theme.background },
         ]}>
-        {listing.listing_type === 'buy' && confirmedSlot ? (
+        {confirmedSlot ? (
           <View style={[styles.ctaButton, styles.ctaSuccess]}>
             <SymbolView
               name={{ ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }}
@@ -369,16 +456,14 @@ export default function ListingDetailScreen() {
           </View>
         ) : (
           <Pressable
-            onPress={listing.listing_type === 'buy' ? handleConfirmBooking : undefined}
-            disabled={listing.listing_type === 'buy' && (!selectedSlotId || isBooking)}
+            onPress={handleConfirmBooking}
+            disabled={!selectedSlotId || isBooking}
             style={({ pressed }) => [
               styles.ctaButton,
               pressed && styles.pressed,
-              listing.listing_type === 'buy' && !selectedSlotId ? styles.ctaButtonDisabled : null,
+              !selectedSlotId ? styles.ctaButtonDisabled : null,
             ]}>
-            <ThemedText style={styles.ctaButtonText}>
-              {listing.listing_type === 'buy' && isBooking ? 'Booking…' : ctaLabel}
-            </ThemedText>
+            <ThemedText style={styles.ctaButtonText}>{isBooking ? 'Booking…' : ctaLabel}</ThemedText>
           </Pressable>
         )}
       </ThemedView>
