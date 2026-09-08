@@ -31,6 +31,11 @@ export function ListingCard({ listing, onPress, isFavorited, onToggleFavorite }:
           tintColor={theme.textSecondary}
           size={28}
         />
+        <View style={styles.typeBadge}>
+          <ThemedText type="small" style={styles.typeBadgeText}>
+            {listing.listing_type === 'rent' ? 'For Rent' : 'For Sale'}
+          </ThemedText>
+        </View>
         <Pressable onPress={onToggleFavorite} style={styles.favoriteButton} hitSlop={8}>
           <View style={styles.favoriteBubble}>
             <SymbolView
@@ -72,6 +77,20 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.three,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  typeBadge: {
+    position: 'absolute',
+    top: Spacing.two,
+    left: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+    borderRadius: Spacing.five,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  typeBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    lineHeight: 14,
   },
   favoriteButton: {
     position: 'absolute',

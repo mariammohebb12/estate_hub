@@ -6,6 +6,7 @@ export type Listing = {
   location_text: string;
   price: number;
   status: string;
+  listing_type: 'buy' | 'rent';
   created_at: string;
 };
 
@@ -36,7 +37,10 @@ export type ListingFilters = {
 };
 
 export async function getAvailableListings(filters: ListingFilters = {}) {
-  let query = supabase.from('listings').select('id, title, location_text, price, status, created_at').eq('status', 'available');
+  let query = supabase
+    .from('listings')
+    .select('id, title, location_text, price, status, listing_type, created_at')
+    .eq('status', 'available');
 
   if (filters.minBedrooms != null) {
     query = query.gte('bedrooms', filters.minBedrooms);

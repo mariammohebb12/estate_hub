@@ -9,6 +9,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
+import { bookSlot, getAvailableSlots, type AvailabilitySlot } from '@/services/bookings';
 import { addFavorite, getFavoritedListingIds, removeFavorite } from '@/services/favorites';
 import { getListingById, type ListingDetail } from '@/services/listings';
 
@@ -17,6 +18,24 @@ const priceFormatter = new Intl.NumberFormat('en-US', {
   currency: 'USD',
   maximumFractionDigits: 0,
 });
+
+const slotDateFormatter = new Intl.DateTimeFormat('en-US', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+});
+
+const slotTimeFormatter = new Intl.DateTimeFormat('en-US', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+function formatSlotLabel(slot: AvailabilitySlot) {
+  const start = new Date(slot.start_time);
+  const end = new Date(slot.end_time);
+  return `${slotDateFormatter.format(start)}, ${slotTimeFormatter.format(start)}–${slotTimeFormatter.format(end)}`;
+}
 
 export default function ListingDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -30,6 +49,14 @@ export default function ListingDetailScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isFavorited, setIsFavorited] = useState(false);
+
+  const [slots, setSlots] = useState<AvailabilitySlot[]>([]);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+  const [slotsError, setSlotsError] = useState<string | null>(null);
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [isBooking, setIsBooking] = useState(false);
+  const [bookingError, setBookingError] = useState<string | null>(null);
+  const [confirmedSlot, setConfirmedSlot] = useState<AvailabilitySlot | null>(null);
 
   const loadListing = useCallback(async () => {
     if (!id) return;
@@ -54,6 +81,54 @@ export default function ListingDetailScreen() {
       setIsFavorited(data.includes(id));
     });
   }, [id, userId]);
+
+  const loadSlots = useCallback(async () => {
+    if (!id) return;
+    setIsLoadingSlots(true);
+    const { data, error } = await getAvailableSlots(id);
+    if (error) {
+      setSlotsError(error.message);
+    } else {
+      setSlotsError(null);
+      setSlots(data);
+    }
+    setIsLoadingSlots(false);
+  }, [id]);
+
+  useEffect(() => {
+    if (listing?.listing_type === 'buy') {
+      loadSlots();
+    }
+  }, [listing?.listing_type, loadSlots]);
+
+  const handleSelectSlot = (slotId: string) => {
+    setBookingError(null);
+    setSelectedSlotId((prev) => (prev === slotId ? null : slotId));
+  };
+
+  const handleConfirmBooking = async () => {
+    if (!id || !userId || !selectedSlotId) return;
+    setIsBooking(true);
+    setBookingError(null);
+
+    const bookedSlot = slots.find((slot) => slot.id === selectedSlotId) ?? null;
+    const { error } = await bookSlot({ slotId: selectedSlotId, listingId: id, buyerId: userId });
+
+    if (error) {
+      setBookingError(
+        error === 'slot_taken'
+          ? 'That time was just booked by someone else. Pick another time.'
+          : error,
+      );
+      setSelectedSlotId(null);
+      await loadSlots();
+    } else {
+      setConfirmedSlot(bookedSlot);
+      setSelectedSlotId(null);
+    }
+
+    setIsBooking(false);
+  };
 
   const handleToggleFavorite = async () => {
     if (!id || !userId) return;
@@ -145,6 +220,12 @@ export default function ListingDetailScreen() {
 
         <ThemedView style={styles.content}>
           <ThemedView style={styles.titleBlock}>
+            <ThemedView
+              style={[styles.typeBadge, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText type="small" themeColor="textSecondary">
+                {listing.listing_type === 'rent' ? 'For Rent' : 'For Sale'}
+              </ThemedText>
+            </ThemedView>
             <ThemedText type="subtitle">{listing.title}</ThemedText>
             <ThemedText type="title" style={styles.price}>
               {priceFormatter.format(listing.price)}
@@ -196,6 +277,58 @@ export default function ListingDetailScreen() {
             </ThemedView>
           ) : null}
 
+          {listing.listing_type === 'buy' && !confirmedSlot ? (
+            <ThemedView style={styles.section}>
+              <ThemedText type="smallBold">Available viewing times</ThemedText>
+
+              {isLoadingSlots ? (
+                <ActivityIndicator style={styles.slotsSpacing} />
+              ) : slotsError ? (
+                <ThemedText style={[styles.errorText, styles.slotsSpacing]}>{slotsError}</ThemedText>
+              ) : slots.length === 0 ? (
+                <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
+                  No viewing times available
+                </ThemedText>
+              ) : (
+                <View style={styles.slotsSpacing}>
+                  {bookingError ? (
+                    <ThemedText style={[styles.errorText, styles.slotError]}>{bookingError}</ThemedText>
+                  ) : null}
+                  <View style={styles.slotsList}>
+                    {slots.map((slot) => {
+                      const selected = selectedSlotId === slot.id;
+                      return (
+                        <Pressable
+                          key={slot.id}
+                          onPress={() => handleSelectSlot(slot.id)}
+                          disabled={isBooking}
+                          style={[
+                            styles.slotRow,
+                            {
+                              backgroundColor: selected ? theme.text : theme.backgroundElement,
+                            },
+                          ]}>
+                          <ThemedText
+                            type="small"
+                            style={{ color: selected ? theme.background : theme.text }}>
+                            {formatSlotLabel(slot)}
+                          </ThemedText>
+                          {selected ? (
+                            <SymbolView
+                              name={{ ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }}
+                              tintColor={theme.background}
+                              size={18}
+                            />
+                          ) : null}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+            </ThemedView>
+          ) : null}
+
           <ThemedView
             style={[styles.agentCard, { backgroundColor: theme.backgroundElement }]}>
             <View style={[styles.avatar, { backgroundColor: theme.backgroundSelected }]}>
@@ -222,9 +355,31 @@ export default function ListingDetailScreen() {
           styles.ctaBar,
           { paddingBottom: insets.bottom + Spacing.two, backgroundColor: theme.background },
         ]}>
-        <Pressable style={({ pressed }) => [styles.ctaButton, pressed && styles.pressed]}>
-          <ThemedText style={styles.ctaButtonText}>{ctaLabel}</ThemedText>
-        </Pressable>
+        {listing.listing_type === 'buy' && confirmedSlot ? (
+          <View style={[styles.ctaButton, styles.ctaSuccess]}>
+            <SymbolView
+              name={{ ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }}
+              tintColor="#ffffff"
+              size={18}
+            />
+            <ThemedText style={styles.ctaButtonText} numberOfLines={1}>
+              Viewing booked for {formatSlotLabel(confirmedSlot)}
+            </ThemedText>
+          </View>
+        ) : (
+          <Pressable
+            onPress={listing.listing_type === 'buy' ? handleConfirmBooking : undefined}
+            disabled={listing.listing_type === 'buy' && (!selectedSlotId || isBooking)}
+            style={({ pressed }) => [
+              styles.ctaButton,
+              pressed && styles.pressed,
+              listing.listing_type === 'buy' && !selectedSlotId ? styles.ctaButtonDisabled : null,
+            ]}>
+            <ThemedText style={styles.ctaButtonText}>
+              {listing.listing_type === 'buy' && isBooking ? 'Booking…' : ctaLabel}
+            </ThemedText>
+          </Pressable>
+        )}
       </ThemedView>
     </ThemedView>
   );
@@ -285,6 +440,13 @@ const styles = StyleSheet.create({
   titleBlock: {
     gap: Spacing.one,
   },
+  typeBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+    borderRadius: Spacing.five,
+    marginBottom: Spacing.half,
+  },
   price: {
     fontSize: 24,
     lineHeight: 30,
@@ -304,6 +466,23 @@ const styles = StyleSheet.create({
   },
   description: {
     lineHeight: 22,
+  },
+  slotsSpacing: {
+    marginTop: Spacing.one,
+  },
+  slotError: {
+    marginBottom: Spacing.two,
+  },
+  slotsList: {
+    gap: Spacing.two,
+  },
+  slotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+    borderRadius: Spacing.three,
   },
   agentCard: {
     flexDirection: 'row',
@@ -340,6 +519,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  ctaButtonDisabled: {
+    opacity: 0.4,
+  },
+  ctaSuccess: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
   },
   ctaButtonText: {
     color: '#ffffff',

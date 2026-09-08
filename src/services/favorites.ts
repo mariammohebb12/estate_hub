@@ -10,7 +10,7 @@ export async function getFavoritedListingIds(userId: string) {
 export async function getFavoritedListings(userId: string) {
   const { data, error } = await supabase
     .from('favorites')
-    .select('created_at, listings ( id, title, location_text, price, status, created_at )')
+    .select('created_at, listings ( id, title, location_text, price, status, listing_type, created_at )')
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 

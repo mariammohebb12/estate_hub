@@ -36,3 +36,21 @@ create table public.favorites (
   created_at timestamptz not null default now(),
   unique (user_id, listing_id)
 );
+
+create table public.availability_slots (
+  id uuid primary key default gen_random_uuid(),
+  listing_id uuid not null references public.listings(id) on delete cascade,
+  start_time timestamptz not null,
+  end_time timestamptz not null,
+  is_booked boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table public.bookings (
+  id uuid primary key default gen_random_uuid(),
+  slot_id uuid not null references public.availability_slots(id) on delete cascade,
+  listing_id uuid not null references public.listings(id) on delete cascade,
+  buyer_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'confirmed' check (status in ('confirmed','cancelled')),
+  created_at timestamptz not null default now()
+);
