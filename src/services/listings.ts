@@ -21,6 +21,8 @@ export type ListingDetail = {
   bathrooms: number | null;
   property_type: string | null;
   location_text: string | null;
+  area_sqm: number | null;
+  amenities: string[] | null;
 };
 
 export async function getAvailableListings() {
@@ -37,7 +39,7 @@ export async function getListingById(id: string) {
   const { data, error } = await supabase
     .from('listings')
     .select(
-      'id, seller_id, title, description, listing_type, status, price, bedrooms, bathrooms, property_type, location_text',
+      'id, seller_id, title, description, listing_type, status, price, bedrooms, bathrooms, property_type, location_text, area_sqm, amenities',
     )
     .eq('id', id)
     .single();

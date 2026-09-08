@@ -23,6 +23,8 @@ create table public.listings (
   latitude double precision,
   longitude double precision,
   style_tags text[],
+  area_sqm numeric,
+  amenities text[],
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

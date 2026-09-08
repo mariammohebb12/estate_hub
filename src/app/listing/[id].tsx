@@ -92,7 +92,10 @@ export default function ListingDetailScreen() {
     listing.bedrooms != null ? `${listing.bedrooms} Bedrooms` : null,
     listing.bathrooms != null ? `${listing.bathrooms} Bathrooms` : null,
     listing.property_type,
+    listing.area_sqm != null ? `${listing.area_sqm} m²` : null,
   ].filter((stat): stat is string => Boolean(stat));
+
+  const amenities = listing.amenities ?? [];
 
   const ctaLabel = listing.listing_type === 'rent' ? 'Book Dates' : 'Book Viewing';
 
@@ -147,6 +150,21 @@ export default function ListingDetailScreen() {
               <ThemedText themeColor="textSecondary" style={styles.description}>
                 {listing.description}
               </ThemedText>
+            </ThemedView>
+          ) : null}
+
+          {amenities.length > 0 ? (
+            <ThemedView style={styles.section}>
+              <ThemedText type="smallBold">Amenities</ThemedText>
+              <View style={styles.statsRow}>
+                {amenities.map((amenity) => (
+                  <ThemedView
+                    key={amenity}
+                    style={[styles.statPill, { backgroundColor: theme.backgroundElement }]}>
+                    <ThemedText type="small">{amenity}</ThemedText>
+                  </ThemedView>
+                ))}
+              </View>
             </ThemedView>
           ) : null}
 
