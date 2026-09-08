@@ -63,6 +63,25 @@ export async function getAvailableListings(filters: ListingFilters = {}) {
   return { data: (data as Listing[] | null) ?? [], error };
 }
 
+export type MyListing = {
+  id: string;
+  title: string;
+  price: number;
+  status: string;
+  listing_type: 'buy' | 'rent';
+  created_at: string;
+};
+
+export async function getMyListings(sellerId: string) {
+  const { data, error } = await supabase
+    .from('listings')
+    .select('id, title, price, status, listing_type, created_at')
+    .eq('seller_id', sellerId)
+    .order('created_at', { ascending: false });
+
+  return { data: (data as MyListing[] | null) ?? [], error };
+}
+
 export async function getListingById(id: string) {
   const { data, error } = await supabase
     .from('listings')
