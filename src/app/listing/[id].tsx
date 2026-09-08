@@ -365,9 +365,7 @@ export default function ListingDetailScreen() {
               tintColor="#ffffff"
               size={18}
             />
-            <ThemedText style={styles.ctaButtonText} numberOfLines={1}>
-              Viewing booked for {formatSlotLabel(confirmedSlot)}
-            </ThemedText>
+            <ThemedText style={styles.ctaButtonText}>Booking Confirmed</ThemedText>
           </View>
         ) : (
           <Pressable
