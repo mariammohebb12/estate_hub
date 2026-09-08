@@ -6,12 +6,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FilterModal } from '@/components/filter-modal';
 import { ListingCard } from '@/components/listing-card';
+import { MyListingsView } from '@/components/my-listings-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useFavoriteToggle } from '@/hooks/use-favorite-toggle';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
+import { useMode } from '@/providers/mode-provider';
 import { applyAiSearchFilters, parseSearchQuery, type ParsedSearchFilters } from '@/services/ai-search';
 import { getFavoritedListingIds } from '@/services/favorites';
 import { getAvailableListings, type Listing, type ListingFilters } from '@/services/listings';
@@ -25,6 +27,30 @@ function countActiveFilters(filters: ListingFilters) {
 }
 
 export default function HomeScreen() {
+  const { session } = useAuth();
+  const { mode, isLoadingMode } = useMode();
+  const userId = session?.user.id;
+
+  if (isLoadingMode) {
+    return (
+      <ThemedView style={styles.container}>
+        <SafeAreaView style={styles.safeArea} edges={['top']}>
+          <ThemedView style={styles.centered}>
+            <ActivityIndicator />
+          </ThemedView>
+        </SafeAreaView>
+      </ThemedView>
+    );
+  }
+
+  if (mode === 'sell') {
+    return userId ? <MyListingsView userId={userId} /> : null;
+  }
+
+  return <BuyerFeed />;
+}
+
+function BuyerFeed() {
   const router = useRouter();
   const theme = useTheme();
   const { session } = useAuth();

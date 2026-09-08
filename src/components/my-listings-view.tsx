@@ -1,14 +1,11 @@
-import { useRouter } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { useAuth } from '@/providers/auth-provider';
 import { getMyListings, type MyListing } from '@/services/listings';
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
@@ -44,11 +41,12 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export default function MyListingsScreen() {
-  const router = useRouter();
+type MyListingsViewProps = {
+  userId: string;
+};
+
+export function MyListingsView({ userId }: MyListingsViewProps) {
   const theme = useTheme();
-  const { session } = useAuth();
-  const userId = session?.user.id;
 
   const [listings, setListings] = useState<MyListing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -56,7 +54,6 @@ export default function MyListingsScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const loadMyListings = useCallback(async () => {
-    if (!userId) return;
     const { data, error } = await getMyListings(userId);
     if (error) {
       setErrorMessage(error.message);
@@ -80,15 +77,6 @@ export default function MyListingsScreen() {
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <View style={styles.headerRow}>
-          <Pressable onPress={() => router.back()} hitSlop={8}>
-            <SymbolView
-              name={{ ios: 'chevron.left', android: 'chevron_left', web: 'chevron_left' }}
-              tintColor={theme.text}
-              size={22}
-            />
-          </Pressable>
-        </View>
         <ThemedText type="title" style={styles.title}>
           My Listings
         </ThemedText>
@@ -143,12 +131,6 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.two,
   },
   title: {
     fontSize: 32,

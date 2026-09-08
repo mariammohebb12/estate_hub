@@ -3,6 +3,7 @@ import { SymbolView, type AndroidSymbol } from 'expo-symbols';
 import type { SFSymbol } from 'sf-symbols-typescript';
 
 import { useTheme } from '@/hooks/use-theme';
+import { useMode } from '@/providers/mode-provider';
 
 const TAB_ICONS: Record<string, { ios: SFSymbol; android: AndroidSymbol }> = {
   index: { ios: 'house', android: 'home' },
@@ -12,13 +13,16 @@ const TAB_ICONS: Record<string, { ios: SFSymbol; android: AndroidSymbol }> = {
   profile: { ios: 'person.crop.circle', android: 'person' },
 };
 
+const SELL_MODE_INDEX_ICON: { ios: SFSymbol; android: AndroidSymbol } = { ios: 'list.bullet', android: 'list' };
+
 export default function TabsLayout() {
   const theme = useTheme();
+  const { mode } = useMode();
 
   return (
     <Tabs
       screenOptions={({ route }) => {
-        const icon = TAB_ICONS[route.name];
+        const icon = route.name === 'index' && mode === 'sell' ? SELL_MODE_INDEX_ICON : TAB_ICONS[route.name];
         return {
           headerShown: false,
           tabBarActiveTintColor: theme.text,
@@ -36,7 +40,7 @@ export default function TabsLayout() {
           ),
         };
       }}>
-      <Tabs.Screen name="index" options={{ title: 'Home' }} />
+      <Tabs.Screen name="index" options={{ title: mode === 'sell' ? 'My Listings' : 'Home' }} />
       <Tabs.Screen name="favorites" options={{ title: 'Favorites' }} />
       <Tabs.Screen name="bookings" options={{ title: 'Bookings' }} />
       <Tabs.Screen name="search" options={{ title: 'Search' }} />
