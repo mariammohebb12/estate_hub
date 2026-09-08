@@ -8,6 +8,9 @@ export type Listing = {
   status: string;
   listing_type: 'buy' | 'rent';
   created_at: string;
+  bedrooms: number | null;
+  property_type: string | null;
+  style_tags: string[] | null;
 };
 
 export type ListingDetail = {
@@ -39,7 +42,7 @@ export type ListingFilters = {
 export async function getAvailableListings(filters: ListingFilters = {}) {
   let query = supabase
     .from('listings')
-    .select('id, title, location_text, price, status, listing_type, created_at')
+    .select('id, title, location_text, price, status, listing_type, created_at, bedrooms, property_type, style_tags')
     .eq('status', 'available');
 
   if (filters.minBedrooms != null) {

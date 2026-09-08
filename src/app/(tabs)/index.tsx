@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FilterModal } from '@/components/filter-modal';
@@ -12,6 +12,7 @@ import { Spacing } from '@/constants/theme';
 import { useFavoriteToggle } from '@/hooks/use-favorite-toggle';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
+import { applyAiSearchFilters, parseSearchQuery, type ParsedSearchFilters } from '@/services/ai-search';
 import { getFavoritedListingIds } from '@/services/favorites';
 import { getAvailableListings, type Listing, type ListingFilters } from '@/services/listings';
 
@@ -37,6 +38,11 @@ export default function HomeScreen() {
   const [filters, setFilters] = useState<ListingFilters>({});
   const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
   const activeFilterCount = countActiveFilters(filters);
+
+  const [aiQuery, setAiQuery] = useState('');
+  const [aiFilters, setAiFilters] = useState<ParsedSearchFilters | null>(null);
+  const [isAiSearching, setIsAiSearching] = useState(false);
+  const [aiSearchError, setAiSearchError] = useState<string | null>(null);
 
   const loadListings = useCallback(async () => {
     const { data, error } = await getAvailableListings(filters);
@@ -69,6 +75,39 @@ export default function HomeScreen() {
     setIsFilterModalVisible(false);
   };
 
+  const handleAiSearch = async () => {
+    const trimmed = aiQuery.trim();
+    if (!trimmed) {
+      setAiFilters(null);
+      setAiSearchError(null);
+      return;
+    }
+
+    setIsAiSearching(true);
+    setAiSearchError(null);
+    const { data, error } = await parseSearchQuery(trimmed);
+
+    if (error || !data) {
+      setAiFilters(null);
+      setAiSearchError('AI search is unavailable right now — showing all listings.');
+    } else {
+      setAiFilters(data);
+    }
+
+    setIsAiSearching(false);
+  };
+
+  const handleClearAiSearch = () => {
+    setAiQuery('');
+    setAiFilters(null);
+    setAiSearchError(null);
+  };
+
+  const displayedListings = useMemo(
+    () => (aiFilters ? applyAiSearchFilters(listings, aiFilters) : listings),
+    [listings, aiFilters],
+  );
+
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -95,6 +134,42 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
+        <View style={styles.aiSearchSection}>
+          <View style={[styles.aiSearchBar, { backgroundColor: theme.backgroundElement }]}>
+            <SymbolView
+              name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
+              tintColor={theme.textSecondary}
+              size={18}
+            />
+            <TextInput
+              placeholder="Try “modern 2 bedroom near the beach”"
+              placeholderTextColor={theme.textSecondary}
+              value={aiQuery}
+              onChangeText={setAiQuery}
+              onSubmitEditing={handleAiSearch}
+              returnKeyType="search"
+              editable={!isAiSearching}
+              style={[styles.aiSearchInput, { color: theme.text }]}
+            />
+            {isAiSearching ? (
+              <ActivityIndicator size="small" />
+            ) : aiFilters || aiQuery ? (
+              <Pressable onPress={handleClearAiSearch} hitSlop={8}>
+                <SymbolView
+                  name={{ ios: 'xmark.circle.fill', android: 'close', web: 'close' }}
+                  tintColor={theme.textSecondary}
+                  size={18}
+                />
+              </Pressable>
+            ) : null}
+          </View>
+          {aiSearchError ? (
+            <ThemedText type="small" style={styles.aiSearchErrorText}>
+              {aiSearchError}
+            </ThemedText>
+          ) : null}
+        </View>
+
         <FilterModal
           visible={isFilterModalVisible}
           filters={filters}
@@ -110,13 +185,15 @@ export default function HomeScreen() {
           <ThemedView style={styles.centered}>
             <ThemedText style={styles.errorText}>{errorMessage}</ThemedText>
           </ThemedView>
-        ) : listings.length === 0 ? (
+        ) : displayedListings.length === 0 ? (
           <ThemedView style={styles.centered}>
-            <ThemedText themeColor="textSecondary">No listings available yet.</ThemedText>
+            <ThemedText themeColor="textSecondary">
+              {aiFilters ? 'No listings match your search.' : 'No listings available yet.'}
+            </ThemedText>
           </ThemedView>
         ) : (
           <FlatList
-            data={listings}
+            data={displayedListings}
             keyExtractor={(item) => item.id}
             numColumns={2}
             columnWrapperStyle={styles.row}
@@ -158,6 +235,27 @@ const styles = StyleSheet.create({
   },
   filterButtonWrapper: {
     flexShrink: 0,
+  },
+  aiSearchSection: {
+    paddingHorizontal: Spacing.four,
+    paddingBottom: Spacing.three,
+    gap: Spacing.one,
+  },
+  aiSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    height: 48,
+    borderRadius: Spacing.five,
+    paddingHorizontal: Spacing.three,
+  },
+  aiSearchInput: {
+    flex: 1,
+    fontSize: 15,
+    height: '100%',
+  },
+  aiSearchErrorText: {
+    color: '#D92D20',
   },
   filterButton: {
     flexDirection: 'row',
