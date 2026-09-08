@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -47,6 +49,7 @@ type MyListingsViewProps = {
 
 export function MyListingsView({ userId }: MyListingsViewProps) {
   const theme = useTheme();
+  const router = useRouter();
 
   const [listings, setListings] = useState<MyListing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -63,10 +66,12 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
     }
   }, [userId]);
 
-  useEffect(() => {
-    setIsLoading(true);
-    loadMyListings().finally(() => setIsLoading(false));
-  }, [loadMyListings]);
+  useFocusEffect(
+    useCallback(() => {
+      setIsLoading(true);
+      loadMyListings().finally(() => setIsLoading(false));
+    }, [loadMyListings]),
+  );
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -77,9 +82,16 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <ThemedText type="title" style={styles.title}>
-          My Listings
-        </ThemedText>
+        <View style={styles.headerRow}>
+          <ThemedText type="title" style={styles.title}>
+            My Listings
+          </ThemedText>
+          <Pressable
+            onPress={() => router.push('/listing-form')}
+            style={({ pressed }) => [styles.fab, pressed && styles.pressed]}>
+            <SymbolView name={{ ios: 'plus', android: 'add', web: 'add' }} tintColor="#ffffff" size={20} />
+          </Pressable>
+        </View>
 
         {isLoading ? (
           <ThemedView style={styles.centered}>
@@ -95,7 +107,7 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
               You haven&apos;t listed any properties yet
             </ThemedText>
             <ThemedText themeColor="textSecondary" style={styles.emptySubtitle}>
-              Create a listing to have it show up here.
+              Tap the + button to create your first listing.
             </ThemedText>
           </ThemedView>
         ) : (
@@ -105,7 +117,13 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
             contentContainerStyle={styles.listContent}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
             renderItem={({ item }) => (
-              <View style={[styles.row, { backgroundColor: theme.backgroundElement }]}>
+              <Pressable
+                onPress={() => router.push({ pathname: '/listing-form', params: { id: item.id } })}
+                style={({ pressed }) => [
+                  styles.row,
+                  { backgroundColor: theme.backgroundElement },
+                  pressed && styles.pressed,
+                ]}>
                 <View style={styles.rowInfo}>
                   <ThemedText type="smallBold" numberOfLines={1}>
                     {item.title}
@@ -115,7 +133,7 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
                   </ThemedText>
                 </View>
                 <StatusBadge status={item.status} />
-              </View>
+              </Pressable>
             )}
             refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
           />
@@ -132,12 +150,25 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
-  title: {
-    fontSize: 32,
-    lineHeight: 38,
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.two,
     paddingBottom: Spacing.three,
+  },
+  title: {
+    fontSize: 32,
+    lineHeight: 38,
+  },
+  fab: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   centered: {
     flex: 1,
@@ -184,5 +215,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
     fontWeight: '600',
+  },
+  pressed: {
+    opacity: 0.85,
   },
 });

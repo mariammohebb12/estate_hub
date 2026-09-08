@@ -25,6 +25,35 @@ export async function updateProfile(userId: string, updates: { full_name: string
   return { error };
 }
 
+export async function uploadAvatar(userId: string, localUri: string) {
+  const extMatch = /\.([a-zA-Z0-9]+)$/.exec(localUri.split('?')[0]);
+  const ext = extMatch?.[1]?.toLowerCase() ?? 'jpg';
+  const path = `${userId}/avatar-${Date.now()}.${ext}`;
+
+  const response = await fetch(localUri);
+  const arrayBuffer = await response.arrayBuffer();
+
+  const { error: uploadError } = await supabase.storage
+    .from('avatars')
+    .upload(path, arrayBuffer, { contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`, upsert: true });
+
+  if (uploadError) {
+    return { data: null, error: uploadError };
+  }
+
+  const { data } = supabase.storage.from('avatars').getPublicUrl(path);
+  const { error: updateError } = await supabase
+    .from('profiles')
+    .update({ avatar_url: data.publicUrl })
+    .eq('id', userId);
+
+  if (updateError) {
+    return { data: null, error: updateError };
+  }
+
+  return { data: data.publicUrl, error: null };
+}
+
 export async function getCurrentMode(userId: string) {
   const { data, error } = await supabase
     .from('profiles')

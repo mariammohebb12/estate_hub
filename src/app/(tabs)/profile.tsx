@@ -1,3 +1,5 @@
+import * as ImagePicker from 'expo-image-picker';
+import { SymbolView } from 'expo-symbols';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -18,7 +20,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
 import { useMode } from '@/providers/mode-provider';
 import { signOut, updatePassword, verifyPassword } from '@/services/auth';
-import { getProfile, updateProfile } from '@/services/profile';
+import { getProfile, updateProfile, uploadAvatar } from '@/services/profile';
 import type { UserMode } from '@/services/profile';
 
 function getInitials(name: string | null, email: string | null) {
@@ -60,6 +62,8 @@ export default function ProfileScreen() {
 
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
@@ -106,6 +110,36 @@ export default function ProfileScreen() {
       setBuyRentChoice(mode);
     }
   }, [mode]);
+
+  const handlePickAvatar = async () => {
+    if (!userId) return;
+    setAvatarError(null);
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setAvatarError('Photo library access is required to change your avatar.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+
+    if (result.canceled || !result.assets[0]) return;
+
+    setIsUploadingAvatar(true);
+    const { data, error } = await uploadAvatar(userId, result.assets[0].uri);
+    setIsUploadingAvatar(false);
+
+    if (error) {
+      setAvatarError('Failed to upload photo.');
+    } else if (data) {
+      setAvatarUrl(data);
+    }
+  };
 
   const handleSaveProfile = async () => {
     if (!userId) return;
@@ -191,18 +225,32 @@ export default function ProfileScreen() {
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          <View style={styles.header}>
-            {avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={styles.avatar} />
-            ) : (
-              <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: theme.backgroundElement }]}>
-                <ThemedText type="subtitle">{getInitials(fullName, email)}</ThemedText>
+          <View style={[styles.headerCard, { backgroundColor: theme.backgroundElement }]}>
+            <Pressable onPress={handlePickAvatar} disabled={isUploadingAvatar} style={styles.avatarWrapper}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+              ) : (
+                <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: theme.backgroundSelected }]}>
+                  <ThemedText type="subtitle">{getInitials(fullName, email)}</ThemedText>
+                </View>
+              )}
+              <View style={[styles.avatarBadge, { backgroundColor: theme.text, borderColor: theme.backgroundElement }]}>
+                {isUploadingAvatar ? (
+                  <ActivityIndicator size="small" color={theme.background} />
+                ) : (
+                  <SymbolView
+                    name={{ ios: 'camera.fill', android: 'photo_camera', web: 'photo_camera' }}
+                    tintColor={theme.background}
+                    size={13}
+                  />
+                )}
               </View>
-            )}
+            </Pressable>
             <ThemedText type="title" style={styles.name}>
               {isLoadingProfile ? ' ' : fullName || 'Your name'}
             </ThemedText>
             <ThemedText themeColor="textSecondary">{email}</ThemedText>
+            {avatarError ? <ThemedText style={styles.errorText}>{avatarError}</ThemedText> : null}
           </View>
 
           <Section title="ACCOUNT">
@@ -255,7 +303,7 @@ export default function ProfileScreen() {
           <Section title="PREFERENCES">
             <View style={styles.field}>
               <FieldLabel>Browsing mode</FieldLabel>
-              <View style={styles.segmentedRow}>
+              <View style={[styles.segmentedRow, { backgroundColor: theme.backgroundSelected }]}>
                 {(['buy', 'rent'] as const).map((value) => {
                   const selected = buyRentChoice === value && mode !== 'sell';
                   return (
@@ -263,10 +311,7 @@ export default function ProfileScreen() {
                       key={value}
                       onPress={() => handleSelectBuyRent(value)}
                       disabled={isLoadingMode}
-                      style={[
-                        styles.segment,
-                        { backgroundColor: selected ? theme.text : theme.background },
-                      ]}>
+                      style={[styles.segment, selected && { backgroundColor: theme.text }]}>
                       <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
                         {value === 'buy' ? 'Buy' : 'Rent'}
                       </ThemedText>
@@ -280,7 +325,7 @@ export default function ProfileScreen() {
               <View style={styles.switchLabelGroup}>
                 <ThemedText>Sell mode</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
-                  Show your listings instead of the buyer feed
+                  {mode === 'sell' ? 'On — showing your listings' : 'Off — showing the buyer feed'}
                 </ThemedText>
               </View>
               <Switch
@@ -390,18 +435,35 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.six,
     gap: Spacing.five,
   },
-  header: {
+  headerCard: {
     alignItems: 'center',
     gap: Spacing.one,
-    paddingTop: Spacing.three,
+    marginTop: Spacing.two,
+    paddingTop: Spacing.five,
+    paddingBottom: Spacing.four,
+    paddingHorizontal: Spacing.four,
+    borderRadius: Spacing.five,
   },
-  avatar: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
+  avatarWrapper: {
     marginBottom: Spacing.two,
   },
+  avatar: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+  },
   avatarPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -436,7 +498,8 @@ const styles = StyleSheet.create({
   },
   segmentedRow: {
     flexDirection: 'row',
-    gap: Spacing.two,
+    borderRadius: Spacing.five,
+    padding: Spacing.half,
   },
   segment: {
     flex: 1,

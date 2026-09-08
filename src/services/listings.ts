@@ -27,6 +27,7 @@ export type ListingDetail = {
   location_text: string | null;
   area_sqm: number | null;
   amenities: string[] | null;
+  style_tags: string[] | null;
 };
 
 export const PROPERTY_TYPES = ['villa', 'apartment', 'house'] as const;
@@ -86,10 +87,44 @@ export async function getListingById(id: string) {
   const { data, error } = await supabase
     .from('listings')
     .select(
-      'id, seller_id, title, description, listing_type, status, price, bedrooms, bathrooms, property_type, location_text, area_sqm, amenities',
+      'id, seller_id, title, description, listing_type, status, price, bedrooms, bathrooms, property_type, location_text, area_sqm, amenities, style_tags',
     )
     .eq('id', id)
     .single();
 
   return { data: data as ListingDetail | null, error };
+}
+
+export type ListingFormValues = {
+  title: string;
+  description: string;
+  listing_type: 'buy' | 'rent';
+  price: number;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  property_type: PropertyType | null;
+  location_text: string;
+  area_sqm: number | null;
+  amenities: string[];
+  style_tags: string[];
+};
+
+export async function createListing(sellerId: string, values: ListingFormValues) {
+  const { data, error } = await supabase
+    .from('listings')
+    .insert({ ...values, seller_id: sellerId })
+    .select('id')
+    .single();
+
+  return { data: data as { id: string } | null, error };
+}
+
+export async function updateListing(id: string, values: ListingFormValues) {
+  const { error } = await supabase.from('listings').update(values).eq('id', id);
+  return { error };
+}
+
+export async function deleteListing(id: string) {
+  const { error } = await supabase.from('listings').delete().eq('id', id);
+  return { error };
 }

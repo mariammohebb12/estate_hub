@@ -76,3 +76,34 @@ export async function bookSlot({ slotId, listingId, buyerId }: BookSlotParams) {
 
   return { error: null };
 }
+
+export type BookingRow = {
+  id: string;
+  status: string;
+  availability_slots: { start_time: string; end_time: string } | null;
+  listings: { id: string; title: string; location_text: string | null; listing_type: 'buy' | 'rent' } | null;
+};
+
+export async function getMyBookings(buyerId: string) {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select(
+      'id, status, availability_slots ( start_time, end_time ), listings ( id, title, location_text, listing_type )',
+    )
+    .eq('buyer_id', buyerId)
+    .order('created_at', { ascending: false });
+
+  return { data: (data as unknown as BookingRow[] | null) ?? [], error };
+}
+
+export async function getBookingsOnMyListings(sellerId: string) {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select(
+      'id, status, availability_slots ( start_time, end_time ), listings!inner ( id, title, location_text, listing_type, seller_id )',
+    )
+    .eq('listings.seller_id', sellerId)
+    .order('created_at', { ascending: false });
+
+  return { data: (data as unknown as BookingRow[] | null) ?? [], error };
+}
