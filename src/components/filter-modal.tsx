@@ -29,6 +29,12 @@ const PROPERTY_TYPE_OPTIONS: { label: string; value: PropertyType | undefined }[
   ...PROPERTY_TYPES.map((type) => ({ label: type[0].toUpperCase() + type.slice(1), value: type })),
 ];
 
+const LISTING_TYPE_OPTIONS: { label: string; value: 'buy' | 'rent' | undefined }[] = [
+  { label: 'Any', value: undefined },
+  { label: 'For Sale', value: 'buy' },
+  { label: 'For Rent', value: 'rent' },
+];
+
 function findPriceBracketIndex(minPrice?: number, maxPrice?: number) {
   const index = PRICE_BRACKETS.findIndex((bracket) => bracket.min === minPrice && bracket.max === maxPrice);
   return index === -1 ? 0 : index;
@@ -49,12 +55,14 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
     findPriceBracketIndex(filters.minPrice, filters.maxPrice),
   );
   const [propertyType, setPropertyType] = useState<PropertyType | undefined>(filters.propertyType);
+  const [listingType, setListingType] = useState<'buy' | 'rent' | undefined>(filters.listingType);
 
   useEffect(() => {
     if (visible) {
       setMinBedrooms(filters.minBedrooms);
       setPriceBracketIndex(findPriceBracketIndex(filters.minPrice, filters.maxPrice));
       setPropertyType(filters.propertyType);
+      setListingType(filters.listingType);
     }
   }, [visible, filters]);
 
@@ -65,6 +73,7 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
       minPrice: bracket.min,
       maxPrice: bracket.max,
       propertyType,
+      listingType,
     });
   };
 
@@ -72,6 +81,7 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
     setMinBedrooms(undefined);
     setPriceBracketIndex(0);
     setPropertyType(undefined);
+    setListingType(undefined);
     onApply({});
   };
 
@@ -94,6 +104,28 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
           </View>
 
           <ThemedView style={styles.section}>
+            <ThemedText type="smallBold">Listing type</ThemedText>
+            <View style={styles.pillRow}>
+              {LISTING_TYPE_OPTIONS.map((option) => {
+                const selected = listingType === option.value;
+                return (
+                  <Pressable
+                    key={option.label}
+                    onPress={() => setListingType(option.value)}
+                    style={[
+                      styles.pill,
+                      { backgroundColor: selected ? '#000000' : theme.backgroundElement },
+                    ]}>
+                    <ThemedText type="small" style={{ color: selected ? '#ffffff' : theme.text }}>
+                      {option.label}
+                    </ThemedText>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </ThemedView>
+
+          <ThemedView style={styles.section}>
             <ThemedText type="smallBold">Bedrooms</ThemedText>
             <View style={styles.pillRow}>
               {BEDROOM_OPTIONS.map((option) => {
@@ -104,9 +136,9 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
                     onPress={() => setMinBedrooms(option.value)}
                     style={[
                       styles.pill,
-                      { backgroundColor: selected ? theme.text : theme.backgroundElement },
+                      { backgroundColor: selected ? '#000000' : theme.backgroundElement },
                     ]}>
-                    <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
+                    <ThemedText type="small" style={{ color: selected ? '#ffffff' : theme.text }}>
                       {option.label}
                     </ThemedText>
                   </Pressable>
@@ -126,9 +158,9 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
                     onPress={() => setPriceBracketIndex(index)}
                     style={[
                       styles.pill,
-                      { backgroundColor: selected ? theme.text : theme.backgroundElement },
+                      { backgroundColor: selected ? '#000000' : theme.backgroundElement },
                     ]}>
-                    <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
+                    <ThemedText type="small" style={{ color: selected ? '#ffffff' : theme.text }}>
                       {bracket.label}
                     </ThemedText>
                   </Pressable>
@@ -148,9 +180,9 @@ export function FilterModal({ visible, filters, onApply, onClose }: FilterModalP
                     onPress={() => setPropertyType(option.value)}
                     style={[
                       styles.pill,
-                      { backgroundColor: selected ? theme.text : theme.backgroundElement },
+                      { backgroundColor: selected ? '#000000' : theme.backgroundElement },
                     ]}>
-                    <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
+                    <ThemedText type="small" style={{ color: selected ? '#ffffff' : theme.text }}>
                       {option.label}
                     </ThemedText>
                   </Pressable>
@@ -188,7 +220,7 @@ const styles = StyleSheet.create({
   closeButton: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   section: { gap: Spacing.two },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  pill: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, borderRadius: Spacing.five },
+  pill: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, borderRadius: 999 },
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: Spacing.two },
   clearButton: { paddingVertical: Spacing.two },
   applyButton: {

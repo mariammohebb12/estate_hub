@@ -24,7 +24,9 @@ Return strict JSON only, matching exactly this shape, with no extra keys and no 
 }
 
 Rules:
-- "bedrooms" is the minimum number of bedrooms mentioned (e.g. "2 bedroom" -> 2). null if not mentioned.
+- "bedrooms" is the minimum number of bedrooms mentioned. Treat "room"/"rooms" as synonymous with
+  "bedroom"/"bedrooms" in this real estate context (e.g. "2 bedroom" -> 2, "two rooms" -> 2,
+  "3 room apartment" -> 3). null if no count is mentioned at all.
 - "property_type" must be exactly one of "villa", "apartment", "house", or null if not mentioned or ambiguous.
 - "style_keywords" is a lowercase array of short descriptive style/feature words found or implied in the
   query (e.g. "modern", "beachfront", "cozy", "resort", "downtown", "pool"). Empty array if none.

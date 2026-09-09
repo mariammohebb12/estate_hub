@@ -1,7 +1,19 @@
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
+import { SymbolView, type AndroidSymbol } from 'expo-symbols';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import type { SFSymbol } from 'sf-symbols-typescript';
+import {
+  ActivityIndicator,
+  Dimensions,
+  FlatList,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DateRangeCalendar, dateCoveredBySlot, isSameDay, startOfMonth } from '@/components/date-range-calendar';
@@ -12,13 +24,27 @@ import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
 import { bookSlot, getAvailableSlots, type AvailabilitySlot } from '@/services/bookings';
 import { addFavorite, getFavoritedListingIds, removeFavorite } from '@/services/favorites';
+import { getListingPhotos, type ListingPhoto } from '@/services/listing-photos';
 import { getListingById, type ListingDetail } from '@/services/listings';
+
+const screenWidth = Dimensions.get('window').width;
+const photoHeight = screenWidth * (3 / 4);
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
   maximumFractionDigits: 0,
 });
+
+function getInitials(fullName: string) {
+  return fullName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('');
+}
+
 
 const slotDateFormatter = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
@@ -40,6 +66,36 @@ function formatSlotLabel(slot: AvailabilitySlot) {
 
 const rangeDateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
 
+type TagIcon = { ios: SFSymbol; android: AndroidSymbol };
+
+type Tag = {
+  key: string;
+  label: string;
+  icon: TagIcon;
+};
+
+const DEFAULT_AMENITY_ICON: TagIcon = { ios: 'checkmark.circle.fill', android: 'check_circle' };
+
+const AMENITY_ICON_RULES: { match: RegExp; icon: TagIcon }[] = [
+  { match: /wi-?fi|internet/i, icon: { ios: 'wifi', android: 'wifi' } },
+  { match: /pool|swim/i, icon: { ios: 'figure.pool.swim', android: 'pool' } },
+  { match: /park|garage/i, icon: { ios: 'parkingsign.circle.fill', android: 'local_parking' } },
+  { match: /gym|fitness/i, icon: { ios: 'dumbbell.fill', android: 'fitness_center' } },
+  { match: /air.?condition|\bac\b/i, icon: { ios: 'snowflake', android: 'ac_unit' } },
+  { match: /heat|fireplace/i, icon: { ios: 'flame.fill', android: 'local_fire_department' } },
+  { match: /laundry|washer/i, icon: { ios: 'washer.fill', android: 'local_laundry_service' } },
+  { match: /pet/i, icon: { ios: 'pawprint.fill', android: 'pets' } },
+  { match: /balcony|terrace|patio|deck/i, icon: { ios: 'sun.max.fill', android: 'balcony' } },
+  { match: /security|alarm/i, icon: { ios: 'shield.fill', android: 'security' } },
+  { match: /elevator|lift/i, icon: { ios: 'arrow.up.arrow.down.circle.fill', android: 'elevator' } },
+  { match: /\btv\b|cable/i, icon: { ios: 'tv.fill', android: 'tv' } },
+  { match: /garden|yard/i, icon: { ios: 'leaf.fill', android: 'yard' } },
+];
+
+function getAmenityIcon(amenity: string): TagIcon {
+  return AMENITY_ICON_RULES.find(({ match }) => match.test(amenity))?.icon ?? DEFAULT_AMENITY_ICON;
+}
+
 export default function ListingDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -52,6 +108,11 @@ export default function ListingDetailScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isFavorited, setIsFavorited] = useState(false);
+  const [isPhoneSheetVisible, setIsPhoneSheetVisible] = useState(false);
+  const [isPhoneCopied, setIsPhoneCopied] = useState(false);
+
+  const [photos, setPhotos] = useState<ListingPhoto[]>([]);
+  const [activePhotoIndex, setActivePhotoIndex] = useState(0);
 
   const [slots, setSlots] = useState<AvailabilitySlot[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
@@ -64,6 +125,9 @@ export default function ListingDetailScreen() {
   const [calendarMonth, setCalendarMonth] = useState(() => startOfMonth(new Date()));
   const [rangeStart, setRangeStart] = useState<Date | null>(null);
   const [rangeEnd, setRangeEnd] = useState<Date | null>(null);
+
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  const [isDaySheetVisible, setIsDaySheetVisible] = useState(false);
 
   const loadListing = useCallback(async () => {
     if (!id) return;
@@ -81,6 +145,16 @@ export default function ListingDetailScreen() {
   useEffect(() => {
     loadListing();
   }, [loadListing]);
+
+  useEffect(() => {
+    if (!id) return;
+    setActivePhotoIndex(0);
+    getListingPhotos(id).then(({ data, error }) => {
+      if (!error) {
+        setPhotos(data);
+      }
+    });
+  }, [id]);
 
   useEffect(() => {
     if (!id || !userId) return;
@@ -111,6 +185,23 @@ export default function ListingDetailScreen() {
   const handleSelectSlot = (slotId: string) => {
     setBookingError(null);
     setSelectedSlotId((prev) => (prev === slotId ? null : slotId));
+  };
+
+  const getSlotsForDay = (day: Date) =>
+    slots
+      .filter((slot) => dateCoveredBySlot(day, slot))
+      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+
+  const handleSelectDay = (day: Date) => {
+    setBookingError(null);
+    if (getSlotsForDay(day).length === 0) return;
+    setSelectedDay(day);
+    setIsDaySheetVisible(true);
+  };
+
+  const handleSelectSlotFromSheet = (slotId: string) => {
+    handleSelectSlot(slotId);
+    setIsDaySheetVisible(false);
   };
 
   const handleSelectDate = (date: Date) => {
@@ -193,6 +284,13 @@ export default function ListingDetailScreen() {
     }
   };
 
+  const handleCopyPhone = async () => {
+    if (!listing?.seller_phone) return;
+    await Clipboard.setStringAsync(listing.seller_phone);
+    setIsPhoneCopied(true);
+    setTimeout(() => setIsPhoneCopied(false), 1500);
+  };
+
   const headerButtons = (
     <View style={[styles.headerButtons, { top: insets.top + Spacing.two }]}>
       <Pressable onPress={() => router.back()} hitSlop={8}>
@@ -229,16 +327,29 @@ export default function ListingDetailScreen() {
     );
   }
 
-  const stats = [
-    listing.bedrooms != null ? `${listing.bedrooms} Bedrooms` : null,
-    listing.bathrooms != null ? `${listing.bathrooms} Bathrooms` : null,
-    listing.property_type,
-    listing.area_sqm != null ? `${listing.area_sqm} m²` : null,
-  ].filter((stat): stat is string => Boolean(stat));
+  const stats: Tag[] = [
+    listing.bedrooms != null
+      ? { key: 'bedrooms', label: `${listing.bedrooms} Bedrooms`, icon: { ios: 'bed.double.fill', android: 'bed' } }
+      : null,
+    listing.bathrooms != null
+      ? { key: 'bathrooms', label: `${listing.bathrooms} Bathrooms`, icon: { ios: 'bathtub.fill', android: 'bathtub' } }
+      : null,
+    listing.property_type
+      ? { key: 'type', label: listing.property_type, icon: { ios: 'house.fill', android: 'home' } }
+      : null,
+    listing.area_sqm != null
+      ? { key: 'area', label: `${listing.area_sqm} m²`, icon: { ios: 'ruler.fill', android: 'straighten' } }
+      : null,
+  ].filter((stat): stat is Tag => Boolean(stat));
 
-  const amenities = listing.amenities ?? [];
+  const amenities: Tag[] = (listing.amenities ?? []).map((amenity) => ({
+    key: amenity,
+    label: amenity,
+    icon: getAmenityIcon(amenity),
+  }));
 
   const ctaLabel = listing.listing_type === 'rent' ? 'Book Dates' : 'Book Viewing';
+  const selectedBuySlot = slots.find((slot) => slot.id === selectedSlotId) ?? null;
 
   return (
     <ThemedView style={styles.container}>
@@ -246,19 +357,44 @@ export default function ListingDetailScreen() {
         contentContainerStyle={{ paddingBottom: insets.bottom + Spacing.six + Spacing.four }}
         showsVerticalScrollIndicator={false}>
         <View style={[styles.photo, { backgroundColor: theme.backgroundElement }]}>
-          <SymbolView
-            name={{ ios: 'photo', android: 'photo', web: 'photo' }}
-            tintColor={theme.textSecondary}
-            size={40}
-          />
+          {photos.length > 0 ? (
+            <FlatList
+              data={photos}
+              keyExtractor={(photo) => photo.id}
+              style={styles.photoList}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(event) => {
+                const index = Math.round(event.nativeEvent.contentOffset.x / screenWidth);
+                setActivePhotoIndex(index);
+              }}
+              renderItem={({ item }) => (
+                <Image source={{ uri: item.photo_url }} style={styles.photoImage} />
+              )}
+            />
+          ) : (
+            <SymbolView
+              name={{ ios: 'photo', android: 'photo', web: 'photo' }}
+              tintColor={theme.textSecondary}
+              size={40}
+            />
+          )}
           <View style={[styles.photoTypeBadge, { top: insets.top + Spacing.two + 36 + Spacing.two }]}>
             <ThemedText type="small" style={styles.photoTypeBadgeText}>
               {listing.listing_type === 'rent' ? 'For Rent' : 'For Sale'}
             </ThemedText>
           </View>
-          <View style={styles.photoDots}>
-            <View style={styles.photoDot} />
-          </View>
+          {photos.length > 1 ? (
+            <View style={styles.photoDots}>
+              {photos.map((photo, index) => (
+                <View
+                  key={photo.id}
+                  style={[styles.photoDot, index !== activePhotoIndex && styles.photoDotInactive]}
+                />
+              ))}
+            </View>
+          ) : null}
         </View>
 
         <ThemedView style={styles.content}>
@@ -274,7 +410,7 @@ export default function ListingDetailScreen() {
                       ? { ios: 'heart.fill', android: 'favorite', web: 'favorite' }
                       : { ios: 'heart', android: 'favorite_border', web: 'favorite_border' }
                   }
-                  tintColor={isFavorited ? theme.text : theme.textSecondary}
+                  tintColor={isFavorited ? '#000000' : theme.textSecondary}
                   size={24}
                 />
               </Pressable>
@@ -294,15 +430,23 @@ export default function ListingDetailScreen() {
           </ThemedView>
 
           {stats.length > 0 ? (
-            <View style={styles.statsRow}>
-              {stats.map((stat) => (
-                <ThemedView
-                  key={stat}
-                  style={[styles.statPill, { backgroundColor: theme.backgroundElement }]}>
-                  <ThemedText type="small">{stat}</ThemedText>
-                </ThemedView>
-              ))}
-            </View>
+            <ThemedView style={styles.section}>
+              <ThemedText type="smallBold">Facilities</ThemedText>
+              <View style={styles.tileGrid}>
+                {stats.map((stat) => (
+                  <ThemedView
+                    key={stat.key}
+                    style={[styles.tile, { backgroundColor: theme.backgroundElement }]}>
+                    <SymbolView
+                      name={{ ios: stat.icon.ios, android: stat.icon.android, web: stat.icon.android }}
+                      tintColor={theme.textSecondary}
+                      size={13}
+                    />
+                    <ThemedText type="small">{stat.label}</ThemedText>
+                  </ThemedView>
+                ))}
+              </View>
+            </ThemedView>
           ) : null}
 
           {listing.description ? (
@@ -317,12 +461,17 @@ export default function ListingDetailScreen() {
           {amenities.length > 0 ? (
             <ThemedView style={styles.section}>
               <ThemedText type="smallBold">Amenities</ThemedText>
-              <View style={styles.statsRow}>
+              <View style={styles.tileGrid}>
                 {amenities.map((amenity) => (
                   <ThemedView
-                    key={amenity}
-                    style={[styles.statPill, { backgroundColor: theme.backgroundElement }]}>
-                    <ThemedText type="small">{amenity}</ThemedText>
+                    key={amenity.key}
+                    style={[styles.tile, { backgroundColor: theme.backgroundElement }]}>
+                    <SymbolView
+                      name={{ ios: amenity.icon.ios, android: amenity.icon.android, web: amenity.icon.android }}
+                      tintColor={theme.textSecondary}
+                      size={13}
+                    />
+                    <ThemedText type="small">{amenity.label}</ThemedText>
                   </ThemedView>
                 ))}
               </View>
@@ -346,36 +495,20 @@ export default function ListingDetailScreen() {
                   {bookingError ? (
                     <ThemedText style={[styles.errorText, styles.slotError]}>{bookingError}</ThemedText>
                   ) : null}
-                  <View style={styles.slotsList}>
-                    {slots.map((slot) => {
-                      const selected = selectedSlotId === slot.id;
-                      return (
-                        <Pressable
-                          key={slot.id}
-                          onPress={() => handleSelectSlot(slot.id)}
-                          disabled={isBooking}
-                          style={[
-                            styles.slotRow,
-                            {
-                              backgroundColor: selected ? theme.text : theme.backgroundElement,
-                            },
-                          ]}>
-                          <ThemedText
-                            type="small"
-                            style={{ color: selected ? theme.background : theme.text }}>
-                            {formatSlotLabel(slot)}
-                          </ThemedText>
-                          {selected ? (
-                            <SymbolView
-                              name={{ ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }}
-                              tintColor={theme.background}
-                              size={18}
-                            />
-                          ) : null}
-                        </Pressable>
-                      );
-                    })}
-                  </View>
+                  <DateRangeCalendar
+                    month={calendarMonth}
+                    minMonth={startOfMonth(new Date())}
+                    onMonthChange={setCalendarMonth}
+                    slots={slots}
+                    rangeStart={null}
+                    rangeEnd={null}
+                    onSelectDate={handleSelectDay}
+                  />
+                  {selectedBuySlot ? (
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.slotsSpacing}>
+                      Selected: {formatSlotLabel(selectedBuySlot)}
+                    </ThemedText>
+                  ) : null}
                 </View>
               )}
             </ThemedView>
@@ -433,21 +566,131 @@ export default function ListingDetailScreen() {
           <ThemedView
             style={[styles.agentCard, { backgroundColor: theme.backgroundElement }]}>
             <View style={[styles.avatar, { backgroundColor: theme.backgroundSelected }]}>
-              <SymbolView
-                name={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
-                tintColor={theme.textSecondary}
-                size={24}
-              />
+              {listing.seller_avatar_url ? (
+                <Image source={{ uri: listing.seller_avatar_url }} style={styles.avatarImage} />
+              ) : listing.seller_full_name ? (
+                <ThemedText type="smallBold">{getInitials(listing.seller_full_name)}</ThemedText>
+              ) : (
+                <SymbolView
+                  name={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
+                  tintColor={theme.textSecondary}
+                  size={24}
+                />
+              )}
             </View>
             <ThemedView style={[styles.agentInfo, { backgroundColor: theme.backgroundElement }]}>
-              <ThemedText type="smallBold">Listed by</ThemedText>
-              <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.agentId}>
-                {listing.seller_id}
+              <ThemedText type="smallBold" numberOfLines={1}>
+                {listing.seller_full_name ?? 'Seller'}
               </ThemedText>
+              {listing.seller_phone ? (
+                <Pressable onPress={() => setIsPhoneSheetVisible(true)} hitSlop={4}>
+                  <ThemedText themeColor="textSecondary" numberOfLines={1}>
+                    Phone number
+                  </ThemedText>
+                </Pressable>
+              ) : null}
             </ThemedView>
           </ThemedView>
         </ThemedView>
       </ScrollView>
+
+      <Modal
+        visible={isPhoneSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsPhoneSheetVisible(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setIsPhoneSheetVisible(false)} />
+        <View style={styles.sheetContainer} pointerEvents="box-none">
+          <ThemedView style={[styles.sheet, { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.four }]}>
+            <View style={styles.sheetHeader}>
+              <ThemedText type="smallBold">Phone number</ThemedText>
+              <Pressable onPress={() => setIsPhoneSheetVisible(false)} hitSlop={8}>
+                <View style={[styles.closeButton, { backgroundColor: theme.backgroundElement }]}>
+                  <SymbolView
+                    name={{ ios: 'xmark', android: 'close', web: 'close' }}
+                    tintColor={theme.text}
+                    size={16}
+                  />
+                </View>
+              </Pressable>
+            </View>
+            <View style={[styles.phoneRow, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText type="subtitle" style={styles.phoneText} numberOfLines={1}>
+                {listing.seller_phone}
+              </ThemedText>
+              <Pressable onPress={handleCopyPhone} hitSlop={8}>
+                <SymbolView
+                  name={
+                    isPhoneCopied
+                      ? { ios: 'checkmark', android: 'check', web: 'check' }
+                      : { ios: 'doc.on.doc', android: 'content_copy', web: 'content_copy' }
+                  }
+                  tintColor={theme.text}
+                  size={20}
+                />
+              </Pressable>
+            </View>
+            {isPhoneCopied ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                Copied to clipboard
+              </ThemedText>
+            ) : null}
+          </ThemedView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isDaySheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsDaySheetVisible(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setIsDaySheetVisible(false)} />
+        <View style={styles.sheetContainer} pointerEvents="box-none">
+          <ThemedView style={[styles.sheet, { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.four }]}>
+            <View style={styles.sheetHeader}>
+              <ThemedText type="smallBold">
+                {selectedDay ? slotDateFormatter.format(selectedDay) : 'Available times'}
+              </ThemedText>
+              <Pressable onPress={() => setIsDaySheetVisible(false)} hitSlop={8}>
+                <View style={[styles.closeButton, { backgroundColor: theme.backgroundElement }]}>
+                  <SymbolView
+                    name={{ ios: 'xmark', android: 'close', web: 'close' }}
+                    tintColor={theme.text}
+                    size={16}
+                  />
+                </View>
+              </Pressable>
+            </View>
+            <View style={styles.slotsList}>
+              {(selectedDay ? getSlotsForDay(selectedDay) : []).map((slot) => {
+                const selected = selectedSlotId === slot.id;
+                return (
+                  <Pressable
+                    key={slot.id}
+                    onPress={() => handleSelectSlotFromSheet(slot.id)}
+                    disabled={isBooking}
+                    style={[
+                      styles.slotRow,
+                      { backgroundColor: selected ? theme.text : theme.backgroundElement },
+                    ]}>
+                    <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
+                      {slotTimeFormatter.format(new Date(slot.start_time))}–
+                      {slotTimeFormatter.format(new Date(slot.end_time))}
+                    </ThemedText>
+                    {selected ? (
+                      <SymbolView
+                        name={{ ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }}
+                        tintColor={theme.background}
+                        size={18}
+                      />
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </ThemedView>
+        </View>
+      </Modal>
 
       {headerButtons}
 
@@ -486,6 +729,27 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheetContainer: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  sheet: {
+    borderTopLeftRadius: Spacing.five,
+    borderTopRightRadius: Spacing.five,
+    padding: Spacing.four,
+    gap: Spacing.three,
+  },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  closeButton: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+  },
+  phoneText: {
+    flex: 1,
+  },
   centered: {
     flex: 1,
     alignItems: 'center',
@@ -513,9 +777,18 @@ const styles = StyleSheet.create({
   },
   photo: {
     width: '100%',
-    aspectRatio: 4 / 3,
+    height: photoHeight,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  photoList: {
+    width: screenWidth,
+    height: photoHeight,
+  },
+  photoImage: {
+    width: screenWidth,
+    height: photoHeight,
   },
   photoTypeBadge: {
     position: 'absolute',
@@ -542,6 +815,9 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: '#ffffff',
   },
+  photoDotInactive: {
+    opacity: 0.4,
+  },
   content: {
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.four,
@@ -563,14 +839,17 @@ const styles = StyleSheet.create({
     fontSize: 24,
     lineHeight: 30,
   },
-  statsRow: {
+  tileGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: Spacing.two,
   },
-  statPill: {
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
+  tile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
     borderRadius: Spacing.five,
   },
   section: {
@@ -614,13 +893,15 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
   },
   agentInfo: {
     flex: 1,
     gap: Spacing.half,
-  },
-  agentId: {
-    fontSize: 12,
   },
   ctaBar: {
     position: 'absolute',

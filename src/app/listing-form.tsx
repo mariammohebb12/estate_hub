@@ -1,9 +1,12 @@
+import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,24 +15,64 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
+import { enhanceListingText, type EnhanceTextField } from '@/services/ai-enhance';
+import { clearFutureAvailability, hasAvailabilitySlots } from '@/services/bookings';
+import { deleteListingPhoto, getListingPhotos, uploadListingPhoto, type ListingPhoto } from '@/services/listing-photos';
 import {
   createListing,
   deleteListing,
   getListingById,
+  LISTING_STATUSES,
   PROPERTY_TYPES,
   updateListing,
+  updateListingStatus,
   type ListingFormValues,
+  type ListingStatus,
   type PropertyType,
 } from '@/services/listings';
 
 const LISTING_TYPES = ['buy', 'rent'] as const;
+
+const STATUS_LABELS: Record<ListingStatus, string> = {
+  available: 'Available',
+  under_offer: 'Under Offer',
+  sold: 'Sold',
+};
+
+// Kept in sync with the same softened palette used for listing status in my-listings-view.tsx.
+const STATUS_COLORS: Record<ListingStatus, { background: string; text: string }> = {
+  available: { background: '#E7F4EC', text: '#3F7A5C' },
+  under_offer: { background: '#F6EFE3', text: '#96703F' },
+  sold: { background: '#EAEAEE', text: '#5B5F6A' },
+};
+
+function getStatusDisplay(status: string) {
+  return {
+    label: STATUS_LABELS[status as ListingStatus] ?? status,
+    colors: STATUS_COLORS[status as ListingStatus] ?? STATUS_COLORS.available,
+  };
+}
+
+function confirmListingTypeChange() {
+  return new Promise<boolean>((resolve) => {
+    Alert.alert(
+      'Change listing type?',
+      "Changing listing type will clear existing availability slots since they don't apply to the new type. Continue?",
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Continue', style: 'destructive', onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+}
 
 function parseTagInput(value: string) {
   return value
@@ -49,15 +92,23 @@ export default function ListingFormScreen() {
   const isEditing = Boolean(id);
   const router = useRouter();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { session } = useAuth();
   const userId = session?.user.id;
 
   const [isLoading, setIsLoading] = useState(isEditing);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  const [status, setStatus] = useState<ListingStatus>('available');
+  const [isStatusSheetVisible, setIsStatusSheetVisible] = useState(false);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [listingType, setListingType] = useState<'buy' | 'rent'>('buy');
+  const [originalListingType, setOriginalListingType] = useState<'buy' | 'rent' | null>(null);
   const [price, setPrice] = useState('');
   const [bedrooms, setBedrooms] = useState('');
   const [bathrooms, setBathrooms] = useState('');
@@ -71,6 +122,16 @@ export default function ListingFormScreen() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [enhancingField, setEnhancingField] = useState<EnhanceTextField | null>(null);
+  const [enhanceError, setEnhanceError] = useState<{ field: EnhanceTextField; message: string } | null>(null);
+  const [pendingSuggestion, setPendingSuggestion] = useState<{ field: EnhanceTextField; text: string } | null>(null);
+
+  const [sellerId, setSellerId] = useState<string | null>(null);
+  const [existingPhotos, setExistingPhotos] = useState<ListingPhoto[]>([]);
+  const [pendingPhotos, setPendingPhotos] = useState<{ uri: string }[]>([]);
+  const [removingPhotoId, setRemovingPhotoId] = useState<string | null>(null);
+  const [photosError, setPhotosError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
@@ -82,9 +143,12 @@ export default function ListingFormScreen() {
         setIsLoading(false);
         return;
       }
+      setSellerId(data.seller_id);
+      setStatus(data.status as ListingStatus);
       setTitle(data.title);
       setDescription(data.description ?? '');
       setListingType(data.listing_type);
+      setOriginalListingType(data.listing_type);
       setPrice(String(data.price));
       setBedrooms(data.bedrooms != null ? String(data.bedrooms) : '');
       setBathrooms(data.bathrooms != null ? String(data.bathrooms) : '');
@@ -95,10 +159,52 @@ export default function ListingFormScreen() {
       setStyleTags((data.style_tags ?? []).join(', '));
       setIsLoading(false);
     });
+    getListingPhotos(id).then(({ data, error }) => {
+      if (cancelled) return;
+      if (!error) {
+        setExistingPhotos(data);
+      }
+    });
     return () => {
       cancelled = true;
     };
   }, [id]);
+
+  const handlePickPhotos = async () => {
+    setPhotosError(null);
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setPhotosError('Photo library access is required to add photos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      quality: 0.7,
+    });
+
+    if (result.canceled) return;
+    setPendingPhotos((prev) => [...prev, ...result.assets.map((asset) => ({ uri: asset.uri }))]);
+  };
+
+  const handleRemoveExistingPhoto = async (photo: ListingPhoto) => {
+    setPhotosError(null);
+    setRemovingPhotoId(photo.id);
+    const { error } = await deleteListingPhoto(photo);
+    setRemovingPhotoId(null);
+
+    if (error) {
+      setPhotosError('Failed to remove photo.');
+      return;
+    }
+    setExistingPhotos((prev) => prev.filter((p) => p.id !== photo.id));
+  };
+
+  const handleRemovePendingPhoto = (index: number) => {
+    setPendingPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const handleSubmit = async () => {
     if (!userId) return;
@@ -116,6 +222,28 @@ export default function ListingFormScreen() {
       return;
     }
 
+    if (isEditing && id && originalListingType && listingType !== originalListingType) {
+      const { hasSlots, error: hasSlotsError } = await hasAvailabilitySlots(id);
+      if (hasSlotsError) {
+        setFormError(hasSlotsError.message);
+        return;
+      }
+
+      if (hasSlots) {
+        const confirmed = await confirmListingTypeChange();
+        if (!confirmed) return;
+
+        setIsSubmitting(true);
+        const { error: clearError } = await clearFutureAvailability(id);
+        if (clearError) {
+          setIsSubmitting(false);
+          setFormError(clearError.message);
+          return;
+        }
+        setIsSubmitting(false);
+      }
+    }
+
     const values: ListingFormValues = {
       title: trimmedTitle,
       description: description.trim(),
@@ -131,15 +259,117 @@ export default function ListingFormScreen() {
     };
 
     setIsSubmitting(true);
-    const { error } = isEditing ? await updateListing(id!, values) : await createListing(userId, values);
-    setIsSubmitting(false);
 
-    if (error) {
-      setFormError(error.message);
+    let listingId: string | null = null;
+    if (isEditing) {
+      const { error } = await updateListing(id!, values);
+      if (error) {
+        setIsSubmitting(false);
+        setFormError(error.message);
+        return;
+      }
+      listingId = id!;
+    } else {
+      const { data, error } = await createListing(userId, values);
+      if (error || !data) {
+        setIsSubmitting(false);
+        setFormError(error?.message ?? 'Failed to create listing.');
+        return;
+      }
+      listingId = data.id;
+    }
+
+    if (listingId && pendingPhotos.length > 0) {
+      let nextSortOrder = existingPhotos.reduce((max, photo) => Math.max(max, photo.sort_order + 1), 0);
+      const photosToUpload = pendingPhotos;
+      for (const photo of photosToUpload) {
+        console.log('handleSubmit: uploading listing photo, about to insert into listing_photos', {
+          listingId,
+          listingSellerId: sellerId ?? userId,
+          currentUserId: userId,
+        });
+        const { data: uploadedPhoto, error: uploadError } = await uploadListingPhoto(listingId, photo.uri, nextSortOrder);
+        if (uploadError) {
+          console.error('handleSubmit: listing photo upload failed', uploadError, {
+            listingId,
+            listingSellerId: sellerId ?? userId,
+            currentUserId: userId,
+          });
+          setIsSubmitting(false);
+          setFormError('Listing saved, but one or more photos failed to upload. You can try adding them again.');
+          return;
+        }
+
+        setExistingPhotos((prev) => [...prev, uploadedPhoto]);
+        setPendingPhotos((prev) => prev.filter((p) => p.uri !== photo.uri));
+        nextSortOrder += 1;
+      }
+    }
+
+    setIsSubmitting(false);
+    router.back();
+  };
+
+  const handleEnhance = async (field: EnhanceTextField) => {
+    const currentText = (field === 'title' ? title : description).trim();
+    if (!currentText) {
+      setEnhanceError({ field, message: 'Add some text first, then enhance it.' });
       return;
     }
 
-    router.back();
+    setEnhanceError(null);
+    setPendingSuggestion(null);
+    setEnhancingField(field);
+    const { data, error } = await enhanceListingText(currentText, field);
+    setEnhancingField(null);
+
+    if (error || !data) {
+      setEnhanceError({ field, message: error ?? 'AI enhancement is temporarily unavailable.' });
+      return;
+    }
+
+    setPendingSuggestion({ field, text: data });
+  };
+
+  const handleAcceptSuggestion = () => {
+    if (!pendingSuggestion) return;
+    if (pendingSuggestion.field === 'title') {
+      setTitle(pendingSuggestion.text);
+    } else {
+      setDescription(pendingSuggestion.text);
+    }
+    setPendingSuggestion(null);
+  };
+
+  const handleDiscardSuggestion = () => {
+    setPendingSuggestion(null);
+  };
+
+  const handleChangeStatus = async (nextStatus: ListingStatus) => {
+    if (!id || nextStatus === status) {
+      setIsStatusSheetVisible(false);
+      return;
+    }
+
+    setIsUpdatingStatus(true);
+    setStatusError(null);
+    const { error, cancelledBookingsCount } = await updateListingStatus(id, nextStatus);
+    setIsUpdatingStatus(false);
+
+    if (error) {
+      setStatusError(error.message ?? 'Failed to update status.');
+      return;
+    }
+
+    setIsStatusSheetVisible(false);
+    setStatus(nextStatus);
+    setStatusMessage(
+      cancelledBookingsCount > 0
+        ? `Status updated to ${STATUS_LABELS[nextStatus]}. ${cancelledBookingsCount} upcoming booking${
+            cancelledBookingsCount === 1 ? '' : 's'
+          } cancelled.`
+        : `Status updated to ${STATUS_LABELS[nextStatus]}.`,
+    );
   };
 
   const handleDelete = () => {
@@ -151,6 +381,15 @@ export default function ListingFormScreen() {
         style: 'destructive',
         onPress: async () => {
           setIsDeleting(true);
+          if (existingPhotos.length > 0) {
+            await Promise.all(
+              existingPhotos.map((photo) =>
+                deleteListingPhoto(photo).catch((err) =>
+                  console.error('handleDelete: failed to remove photo from storage', photo.id, err),
+                ),
+              ),
+            );
+          }
           const { error } = await deleteListing(id);
           setIsDeleting(false);
           if (error) {
@@ -189,7 +428,36 @@ export default function ListingFormScreen() {
             <ThemedText style={styles.errorText}>{loadError}</ThemedText>
           ) : (
             <>
-              <Field label="Title">
+              {isEditing ? (
+                <Field label="Status">
+                  <Pressable
+                    onPress={() => {
+                      setStatusError(null);
+                      setIsStatusSheetVisible(true);
+                    }}
+                    style={[styles.statusField, { backgroundColor: theme.backgroundElement }]}>
+                    <View style={[styles.statusPill, { backgroundColor: getStatusDisplay(status).colors.background }]}>
+                      <ThemedText type="small" style={{ color: getStatusDisplay(status).colors.text, fontWeight: '600' }}>
+                        {getStatusDisplay(status).label}
+                      </ThemedText>
+                    </View>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      Change
+                    </ThemedText>
+                  </Pressable>
+                  {statusMessage ? (
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {statusMessage}
+                    </ThemedText>
+                  ) : null}
+                </Field>
+              ) : null}
+
+              <Field
+                label="Title"
+                action={
+                  <EnhanceButton onPress={() => handleEnhance('title')} isLoading={enhancingField === 'title'} />
+                }>
                 <TextInput
                   value={title}
                   onChangeText={setTitle}
@@ -197,9 +465,68 @@ export default function ListingFormScreen() {
                   placeholderTextColor={theme.textSecondary}
                   style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
                 />
+                {enhanceError?.field === 'title' ? (
+                  <ThemedText style={styles.errorText}>{enhanceError.message}</ThemedText>
+                ) : null}
+                {pendingSuggestion?.field === 'title' ? (
+                  <EnhanceSuggestion
+                    text={pendingSuggestion.text}
+                    onAccept={handleAcceptSuggestion}
+                    onDiscard={handleDiscardSuggestion}
+                  />
+                ) : null}
               </Field>
 
-              <Field label="Description">
+              <Field label="Photos">
+                <View style={styles.photoGrid}>
+                  {existingPhotos.map((photo) => (
+                    <View key={photo.id} style={styles.photoTile}>
+                      <Image source={{ uri: photo.photo_url }} style={styles.photoImage} />
+                      <Pressable
+                        onPress={() => handleRemoveExistingPhoto(photo)}
+                        disabled={removingPhotoId === photo.id}
+                        hitSlop={6}
+                        style={styles.photoRemoveButton}>
+                        {removingPhotoId === photo.id ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <SymbolView name={{ ios: 'xmark', android: 'close', web: 'close' }} tintColor="#ffffff" size={12} />
+                        )}
+                      </Pressable>
+                    </View>
+                  ))}
+                  {pendingPhotos.map((photo, index) => (
+                    <View key={`pending-${photo.uri}-${index}`} style={styles.photoTile}>
+                      <Image source={{ uri: photo.uri }} style={styles.photoImage} />
+                      <Pressable
+                        onPress={() => handleRemovePendingPhoto(index)}
+                        hitSlop={6}
+                        style={styles.photoRemoveButton}>
+                        <SymbolView name={{ ios: 'xmark', android: 'close', web: 'close' }} tintColor="#ffffff" size={12} />
+                      </Pressable>
+                    </View>
+                  ))}
+                  <Pressable
+                    onPress={handlePickPhotos}
+                    style={[styles.photoTile, styles.photoAddTile, { borderColor: theme.backgroundSelected }]}>
+                    <SymbolView
+                      name={{ ios: 'plus', android: 'add', web: 'add' }}
+                      tintColor={theme.textSecondary}
+                      size={22}
+                    />
+                  </Pressable>
+                </View>
+                {photosError ? <ThemedText style={styles.errorText}>{photosError}</ThemedText> : null}
+              </Field>
+
+              <Field
+                label="Description"
+                action={
+                  <EnhanceButton
+                    onPress={() => handleEnhance('description')}
+                    isLoading={enhancingField === 'description'}
+                  />
+                }>
                 <TextInput
                   value={description}
                   onChangeText={setDescription}
@@ -213,6 +540,16 @@ export default function ListingFormScreen() {
                     { color: theme.text, borderColor: theme.backgroundSelected },
                   ]}
                 />
+                {enhanceError?.field === 'description' ? (
+                  <ThemedText style={styles.errorText}>{enhanceError.message}</ThemedText>
+                ) : null}
+                {pendingSuggestion?.field === 'description' ? (
+                  <EnhanceSuggestion
+                    text={pendingSuggestion.text}
+                    onAccept={handleAcceptSuggestion}
+                    onDiscard={handleDiscardSuggestion}
+                  />
+                ) : null}
               </Field>
 
               <Field label="Listing type">
@@ -351,6 +688,18 @@ export default function ListingFormScreen() {
 
               {isEditing ? (
                 <Pressable
+                  onPress={() => router.push({ pathname: '/manage-availability', params: { id: id! } })}
+                  style={({ pressed }) => [
+                    styles.secondaryButton,
+                    { borderColor: theme.backgroundSelected },
+                    pressed && styles.pressed,
+                  ]}>
+                  <ThemedText>Manage Availability</ThemedText>
+                </Pressable>
+              ) : null}
+
+              {isEditing ? (
+                <Pressable
                   onPress={handleDelete}
                   disabled={isDeleting}
                   style={({ pressed }) => [styles.deleteButton, pressed && styles.pressed]}>
@@ -365,6 +714,51 @@ export default function ListingFormScreen() {
           )}
         </ScrollView>
       </SafeAreaView>
+
+      <Modal
+        visible={isStatusSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsStatusSheetVisible(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setIsStatusSheetVisible(false)} />
+        <View style={styles.sheetContainer} pointerEvents="box-none">
+          <ThemedView
+            style={[styles.sheet, { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.four }]}>
+            <View style={styles.sheetHeader}>
+              <ThemedText type="smallBold">Change status</ThemedText>
+              <Pressable onPress={() => setIsStatusSheetVisible(false)} hitSlop={8}>
+                <View style={[styles.closeButton, { backgroundColor: theme.backgroundElement }]}>
+                  <SymbolView name={{ ios: 'xmark', android: 'close', web: 'close' }} tintColor={theme.text} size={16} />
+                </View>
+              </Pressable>
+            </View>
+
+            {statusError ? <ThemedText style={styles.errorText}>{statusError}</ThemedText> : null}
+
+            {LISTING_STATUSES.map((option) => {
+              const selected = option === status;
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => handleChangeStatus(option)}
+                  disabled={isUpdatingStatus}
+                  style={[styles.statusOptionRow, { backgroundColor: theme.backgroundElement }]}>
+                  <ThemedText type="small">{STATUS_LABELS[option]}</ThemedText>
+                  {selected ? (
+                    <SymbolView
+                      name={{ ios: 'checkmark', android: 'check', web: 'check' }}
+                      tintColor={theme.text}
+                      size={18}
+                    />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+
+            {isUpdatingStatus ? <ActivityIndicator style={styles.statusSpacing} /> : null}
+          </ThemedView>
+        </View>
+      </Modal>
     </ThemedView>
   );
 }
@@ -373,17 +767,74 @@ function Field({
   label,
   children,
   style,
+  action,
 }: {
   label: string;
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
+  action?: ReactNode;
 }) {
   return (
     <View style={[styles.field, style]}>
-      <ThemedText type="small" themeColor="textSecondary">
-        {label}
-      </ThemedText>
+      <View style={styles.fieldLabelRow}>
+        <ThemedText type="small" themeColor="textSecondary">
+          {label}
+        </ThemedText>
+        {action}
+      </View>
       {children}
+    </View>
+  );
+}
+
+function EnhanceButton({ onPress, isLoading }: { onPress: () => void; isLoading: boolean }) {
+  const theme = useTheme();
+  return (
+    <Pressable onPress={onPress} disabled={isLoading} hitSlop={6} style={styles.enhanceButton}>
+      {isLoading ? (
+        <ActivityIndicator size="small" color={theme.textSecondary} />
+      ) : (
+        <>
+          <SymbolView
+            name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
+            tintColor={theme.text}
+            size={13}
+          />
+          <ThemedText type="small" style={styles.enhanceButtonText}>
+            Enhance with AI
+          </ThemedText>
+        </>
+      )}
+    </Pressable>
+  );
+}
+
+function EnhanceSuggestion({
+  text,
+  onAccept,
+  onDiscard,
+}: {
+  text: string;
+  onAccept: () => void;
+  onDiscard: () => void;
+}) {
+  const theme = useTheme();
+  return (
+    <View
+      style={[styles.suggestionBox, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected }]}>
+      <ThemedText type="small">{text}</ThemedText>
+      <View style={styles.suggestionActions}>
+        <Pressable onPress={onDiscard} style={styles.suggestionButton}>
+          <ThemedText type="small" themeColor="textSecondary">
+            Discard
+          </ThemedText>
+        </Pressable>
+        <Pressable onPress={onAccept} style={[styles.suggestionButton, { backgroundColor: theme.text }]}>
+          <ThemedText type="small" style={{ color: theme.background, fontWeight: '600' }}>
+            Use this
+          </ThemedText>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -414,6 +865,89 @@ const styles = StyleSheet.create({
   },
   field: {
     gap: Spacing.one,
+  },
+  fieldLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  enhanceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.half,
+    minHeight: 20,
+  },
+  enhanceButtonText: {
+    fontWeight: '600',
+  },
+  suggestionBox: {
+    borderWidth: 1,
+    borderRadius: Spacing.three,
+    padding: Spacing.three,
+    gap: Spacing.two,
+  },
+  suggestionActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Spacing.two,
+  },
+  suggestionButton: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Spacing.five,
+  },
+  statusField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+  },
+  statusPill: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.half,
+    borderRadius: Spacing.five,
+  },
+  statusSpacing: {
+    marginTop: Spacing.one,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheetContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  sheet: {
+    borderTopLeftRadius: Spacing.five,
+    borderTopRightRadius: Spacing.five,
+    padding: Spacing.four,
+    gap: Spacing.two,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.one,
+  },
+  closeButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
   },
   row: {
     flexDirection: 'row',
@@ -466,6 +1000,45 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: '#ffffff',
     fontWeight: '600',
+  },
+  secondaryButton: {
+    height: 48,
+    borderRadius: Spacing.three,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  photoTile: {
+    width: 80,
+    height: 80,
+    borderRadius: Spacing.three,
+    overflow: 'hidden',
+  },
+  photoImage: {
+    width: '100%',
+    height: '100%',
+  },
+  photoAddTile: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoRemoveButton: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   deleteButton: {
     height: 48,

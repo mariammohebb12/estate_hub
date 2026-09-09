@@ -1,4 +1,4 @@
-import type { Listing } from '@/services/listings';
+import { withCoverPhoto, type ListingWithPhotos } from '@/services/listings';
 import { supabase } from '@/services/supabase';
 
 export async function getFavoritedListingIds(userId: string) {
@@ -10,7 +10,9 @@ export async function getFavoritedListingIds(userId: string) {
 export async function getFavoritedListings(userId: string) {
   const { data, error } = await supabase
     .from('favorites')
-    .select('created_at, listings ( id, title, location_text, price, status, listing_type, created_at )')
+    .select(
+      'created_at, listings ( id, title, location_text, price, status, listing_type, created_at, bedrooms, property_type, style_tags, listing_photos(photo_url, sort_order) )',
+    )
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
@@ -19,8 +21,9 @@ export async function getFavoritedListings(userId: string) {
   }
 
   const listings = (data ?? [])
-    .map((row) => row.listings as unknown as Listing | null)
-    .filter((listing): listing is Listing => Boolean(listing));
+    .map((row) => row.listings as unknown as ListingWithPhotos | null)
+    .filter((listing): listing is ListingWithPhotos => Boolean(listing))
+    .map(withCoverPhoto);
 
   return { data: listings, error: null };
 }

@@ -61,5 +61,6 @@ export const Spacing = {
   six: 64,
 } as const;
 
-export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
+export const TabBarHeight = 64;
+export const TabBarBottomGap = Spacing.two;
 export const MaxContentWidth = 800;

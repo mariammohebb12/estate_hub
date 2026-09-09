@@ -1,6 +1,7 @@
 import type { Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useState, type PropsWithChildren } from 'react';
 
+import { registerForPushNotifications } from '@/services/push-notifications';
 import { supabase } from '@/services/supabase';
 
 type AuthContextValue = {
@@ -28,6 +29,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId) return;
+    registerForPushNotifications(userId);
+  }, [session?.user.id]);
 
   return <AuthContext.Provider value={{ session, isLoading }}>{children}</AuthContext.Provider>;
 }

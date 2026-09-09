@@ -15,6 +15,13 @@ function RootNavigator() {
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
+      {/*
+        Ungated: completing a password recovery link establishes a real
+        Supabase session, which would otherwise flip `session` truthy and
+        instantly bounce this screen over to the (tabs) guard below before the
+        user can actually set a new password.
+      */}
+      <Stack.Screen name="reset-password" />
       <Stack.Protected guard={!session}>
         <Stack.Screen name="(auth)" />
       </Stack.Protected>

@@ -14,7 +14,7 @@ create table public.listings (
   title text not null,
   description text,
   listing_type text not null check (listing_type in ('buy','rent')),
-  status text not null default 'available' check (status in ('available','under_offer','sold','rented')),
+  status text not null default 'available' check (status in ('available','under_offer','sold')),
   price numeric not null,
   bedrooms int,
   bathrooms int,
@@ -27,6 +27,14 @@ create table public.listings (
   amenities text[],
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table public.listing_photos (
+  id uuid primary key default gen_random_uuid(),
+  listing_id uuid not null references public.listings(id) on delete cascade,
+  photo_url text not null,
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
 );
 
 create table public.favorites (

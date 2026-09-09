@@ -1,4 +1,4 @@
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +11,7 @@ import { signInWithEmail } from '@/services/auth';
 
 export default function LoginScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -68,6 +69,12 @@ export default function LoginScreen() {
 
           {errorMessage ? <ThemedText style={styles.errorText}>{errorMessage}</ThemedText> : null}
 
+          <Pressable onPress={() => router.push('/forgot-password')} disabled={isSubmitting} hitSlop={4} style={styles.forgotPasswordLink}>
+            <ThemedText type="small" themeColor="textSecondary">
+              Forgot Password?
+            </ThemedText>
+          </Pressable>
+
           <Pressable
             onPress={handleLogin}
             disabled={isSubmitting}
@@ -123,6 +130,9 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#D92D20',
+  },
+  forgotPasswordLink: {
+    alignSelf: 'flex-end',
   },
   primaryButton: {
     height: 52,

@@ -11,6 +11,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useFavoriteToggle } from '@/hooks/use-favorite-toggle';
+import { useTabBarClearance } from '@/hooks/use-tab-bar-clearance';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
 import { useMode } from '@/providers/mode-provider';
@@ -23,6 +24,7 @@ function countActiveFilters(filters: ListingFilters) {
   if (filters.minBedrooms != null) count += 1;
   if (filters.minPrice != null || filters.maxPrice != null) count += 1;
   if (filters.propertyType) count += 1;
+  if (filters.listingType) count += 1;
   return count;
 }
 
@@ -56,6 +58,7 @@ function BuyerFeed() {
   const { session } = useAuth();
   const userId = session?.user.id;
   const { favoritedIds, setFavoritedIds, toggleFavorite } = useFavoriteToggle(userId);
+  const tabBarClearance = useTabBarClearance();
 
   const [listings, setListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -223,7 +226,7 @@ function BuyerFeed() {
             keyExtractor={(item) => item.id}
             numColumns={2}
             columnWrapperStyle={styles.row}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[styles.listContent, { paddingBottom: Spacing.five + tabBarClearance }]}
             renderItem={({ item }) => (
               <ListingCard
                 listing={item}
@@ -317,7 +320,6 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.five,
     gap: Spacing.three,
   },
   row: {

@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -7,6 +7,7 @@ import { ListingCard } from '@/components/listing-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
+import { useTabBarClearance } from '@/hooks/use-tab-bar-clearance';
 import { useAuth } from '@/providers/auth-provider';
 import { getFavoritedListings, removeFavorite } from '@/services/favorites';
 import type { Listing } from '@/services/listings';
@@ -15,6 +16,7 @@ export default function FavoritesScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user.id;
+  const tabBarClearance = useTabBarClearance();
 
   const [listings, setListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,10 +34,12 @@ export default function FavoritesScreen() {
     }
   }, [userId]);
 
-  useEffect(() => {
-    setIsLoading(true);
-    loadFavorites().finally(() => setIsLoading(false));
-  }, [loadFavorites]);
+  useFocusEffect(
+    useCallback(() => {
+      setIsLoading(true);
+      loadFavorites().finally(() => setIsLoading(false));
+    }, [loadFavorites]),
+  );
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -62,7 +66,7 @@ export default function FavoritesScreen() {
           Favorites
         </ThemedText>
 
-        {isLoading ? (
+        {isLoading && listings.length === 0 ? (
           <ThemedView style={styles.centered}>
             <ActivityIndicator />
           </ThemedView>
@@ -82,7 +86,7 @@ export default function FavoritesScreen() {
             keyExtractor={(item) => item.id}
             numColumns={2}
             columnWrapperStyle={styles.row}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[styles.listContent, { paddingBottom: Spacing.five + tabBarClearance }]}
             renderItem={({ item }) => (
               <ListingCard
                 listing={item}
@@ -125,7 +129,6 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.five,
     gap: Spacing.three,
   },
   row: {
