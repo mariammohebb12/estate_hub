@@ -200,6 +200,35 @@ export async function bookSlot({ slotId, listingId, buyerId }: BookSlotParams) {
   return { error: null };
 }
 
+export type BookRentalRangeParams = {
+  slotId: string;
+  buyerId: string;
+  rangeStart: string;
+  rangeEnd: string;
+};
+
+// Books only the buyer's selected sub-range of a rent-mode listing's open
+// availability window (e.g. Sep 10-13 out of a seller's Sep 10-30 slot).
+// Splits the slot server-side so the rest of the window (Sep 14-30) stays
+// bookable — see book_rental_range in schema.sql.
+export async function bookRentalRange({ slotId, buyerId, rangeStart, rangeEnd }: BookRentalRangeParams) {
+  const { error } = await supabase.rpc('book_rental_range', {
+    p_slot_id: slotId,
+    p_range_start: rangeStart,
+    p_range_end: rangeEnd,
+    p_buyer_id: buyerId,
+  });
+
+  if (error) {
+    if (error.message.includes('slot_taken')) {
+      return { error: 'slot_taken' as const };
+    }
+    return { error: error.message };
+  }
+
+  return { error: null };
+}
+
 export type BookingRow = {
   id: string;
   status: string;

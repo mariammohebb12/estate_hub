@@ -82,3 +82,86 @@ create table public.bookings (
   status text not null default 'confirmed' check (status in ('confirmed','cancelled')),
   created_at timestamptz not null default now()
 );
+
+-- A rent-mode availability_slots row spans a seller's whole open rental
+-- window (e.g. Sep 10-30). A buyer can book any sub-range within it
+-- (e.g. Sep 10-13). This splits that row atomically: the booked sub-range
+-- becomes its own is_booked slot (which the new booking references), and
+-- any leftover time before/after the sub-range is re-inserted as new,
+-- still-unbooked slots so it stays bookable by others.
+create function public.book_rental_range(
+  p_slot_id uuid,
+  p_range_start timestamptz,
+  p_range_end timestamptz,
+  p_buyer_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_listing_id uuid;
+  v_slot_start timestamptz;
+  v_slot_end timestamptz;
+  v_overlap_exists boolean;
+begin
+  select listing_id, start_time, end_time
+    into v_listing_id, v_slot_start, v_slot_end
+  from public.availability_slots
+  where id = p_slot_id and is_booked = false
+  for update;
+
+  if not found then
+    raise exception 'slot_taken';
+  end if;
+
+  if p_range_start < v_slot_start or p_range_end > v_slot_end or p_range_start >= p_range_end then
+    raise exception 'slot_taken';
+  end if;
+
+  -- Serialize concurrent bookings on this listing so two buyers can't both
+  -- pass the overlap check below for two different (possibly overlapping)
+  -- unbooked slot rows at the same time.
+  perform 1 from public.listings where id = v_listing_id for update;
+
+  -- Defense in depth: confirm no CONFIRMED booking on this listing already
+  -- covers any part of the requested range. This is independent of the
+  -- is_booked flag above, so it still holds even if a seller creates two
+  -- overlapping availability rows for the same listing.
+  select exists (
+    select 1
+    from public.bookings b
+    join public.availability_slots s on s.id = b.slot_id
+    where b.listing_id = v_listing_id
+      and b.status = 'confirmed'
+      and s.start_time < p_range_end
+      and s.end_time > p_range_start
+  ) into v_overlap_exists;
+
+  if v_overlap_exists then
+    raise exception 'slot_taken';
+  end if;
+
+  if p_range_start > v_slot_start then
+    insert into public.availability_slots (listing_id, start_time, end_time, is_booked)
+    values (v_listing_id, v_slot_start, p_range_start, false);
+  end if;
+
+  if p_range_end < v_slot_end then
+    insert into public.availability_slots (listing_id, start_time, end_time, is_booked)
+    values (v_listing_id, p_range_end, v_slot_end, false);
+  end if;
+
+  update public.availability_slots
+  set start_time = p_range_start, end_time = p_range_end, is_booked = true
+  where id = p_slot_id;
+
+  insert into public.bookings (slot_id, listing_id, buyer_id, status)
+  values (p_slot_id, v_listing_id, p_buyer_id, 'confirmed');
+
+  return p_slot_id;
+end;
+$$;
+
+grant execute on function public.book_rental_range(uuid, timestamptz, timestamptz, uuid) to authenticated;
