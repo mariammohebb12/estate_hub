@@ -23,6 +23,10 @@ export default function SignupScreen() {
       setErrorMessage('Fill in your name, email, and password.');
       return;
     }
+    if (password.length < 8) {
+      setErrorMessage('Password must be at least 8 characters.');
+      return;
+    }
 
     setErrorMessage(null);
     setIsSubmitting(true);

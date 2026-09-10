@@ -347,8 +347,8 @@ export default function ProfileScreen() {
       setPasswordFeedback({ type: 'error', message: 'New passwords do not match.' });
       return;
     }
-    if (newPassword.length < 6) {
-      setPasswordFeedback({ type: 'error', message: 'New password must be at least 6 characters.' });
+    if (newPassword.length < 8) {
+      setPasswordFeedback({ type: 'error', message: 'Password must be at least 8 characters.' });
       return;
     }
     if (!email) {
