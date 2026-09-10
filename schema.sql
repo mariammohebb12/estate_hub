@@ -8,6 +8,26 @@ create table public.profiles (
   created_at timestamptz not null default now()
 );
 
+-- Creates the profiles row as part of auth.users' own insert transaction, so a
+-- session can never exist without a matching profile (signup previously
+-- inserted this client-side, which raced the app's session-based navigation).
+create function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, full_name)
+  values (new.id, new.raw_user_meta_data->>'full_name')
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
 create table public.listings (
   id uuid primary key default gen_random_uuid(),
   seller_id uuid not null references public.profiles(id) on delete cascade,

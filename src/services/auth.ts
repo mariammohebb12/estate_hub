@@ -12,22 +12,19 @@ type SignInParams = {
 };
 
 export async function signUpWithEmail({ name, email, password }: SignUpParams) {
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if (error) {
-    return { error };
-  }
+  // The profiles row is created by the `on_auth_user_created` DB trigger (see
+  // schema.sql), which runs inside Supabase Auth's own transaction — before
+  // any session is handed back here. Creating it client-side used to race the
+  // app's session-based navigation (AuthProvider routes into the tabs the
+  // moment a session exists, which can happen before/independently of an
+  // awaited client-side insert), silently leaving accounts without a profile.
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { full_name: name } },
+  });
 
-  if (data.user) {
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .insert({ id: data.user.id, full_name: name });
-    if (profileError) {
-      console.error('signUpWithEmail: failed to insert profile row', profileError);
-      return { error: profileError };
-    }
-  }
-
-  return { error: null };
+  return { error };
 }
 
 export async function signInWithEmail({ email, password }: SignInParams) {
