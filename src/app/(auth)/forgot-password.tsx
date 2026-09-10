@@ -10,6 +10,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { requestPasswordReset } from '@/services/auth';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 export default function ForgotPasswordScreen() {
   const theme = useTheme();
@@ -31,7 +32,8 @@ export default function ForgotPasswordScreen() {
     setIsSubmitting(false);
 
     if (error) {
-      setErrorMessage(error.message);
+      console.error('handleSubmit: failed to request password reset', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     } else {
       setIsSubmitted(true);
     }

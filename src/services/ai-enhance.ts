@@ -1,4 +1,5 @@
 import { supabase } from '@/services/supabase';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 export type EnhanceTextField = 'title' | 'description';
 
@@ -12,7 +13,8 @@ export async function enhanceListingText(text: string, field: EnhanceTextField) 
   });
 
   if (error || !data) {
-    return { data: null, error: error?.message ?? 'AI enhancement is temporarily unavailable' };
+    if (error) console.error('enhanceListingText: Edge Function call failed', error);
+    return { data: null, error: error ? getFriendlyErrorMessage(error) : 'AI enhancement is temporarily unavailable.' };
   }
 
   return { data: data.enhanced_text, error: null };

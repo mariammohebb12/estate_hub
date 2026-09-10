@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ErrorState } from '@/components/error-state';
 import { FilterModal } from '@/components/filter-modal';
 import { ListingCard } from '@/components/listing-card';
 import { MyListingsView } from '@/components/my-listings-view';
@@ -18,6 +19,7 @@ import { useMode } from '@/providers/mode-provider';
 import { applyAiSearchFilters, parseSearchQuery, type ParsedSearchFilters } from '@/services/ai-search';
 import { getFavoritedListingIds } from '@/services/favorites';
 import { getAvailableListings, type Listing, type ListingFilters } from '@/services/listings';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 function countActiveFilters(filters: ListingFilters) {
   let count = 0;
@@ -76,7 +78,8 @@ function BuyerFeed() {
   const loadListings = useCallback(async () => {
     const { data, error } = await getAvailableListings(filters);
     if (error) {
-      setErrorMessage(error.message);
+      console.error('loadListings: failed to load listings', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     } else {
       setErrorMessage(null);
       setListings(data);
@@ -97,6 +100,11 @@ function BuyerFeed() {
     setIsRefreshing(true);
     await loadListings();
     setIsRefreshing(false);
+  };
+
+  const handleRetry = () => {
+    setIsLoading(true);
+    loadListings().finally(() => setIsLoading(false));
   };
 
   const handleApplyFilters = (nextFilters: ListingFilters) => {
@@ -206,13 +214,13 @@ function BuyerFeed() {
           onClose={() => setIsFilterModalVisible(false)}
         />
 
-        {isLoading ? (
+        {isLoading && listings.length === 0 ? (
           <ThemedView style={styles.centered}>
             <ActivityIndicator />
           </ThemedView>
         ) : errorMessage ? (
           <ThemedView style={styles.centered}>
-            <ThemedText style={styles.errorText}>{errorMessage}</ThemedText>
+            <ErrorState message={errorMessage} onRetry={handleRetry} isRetrying={isLoading} />
           </ThemedView>
         ) : displayedListings.length === 0 ? (
           <ThemedView style={styles.centered}>
@@ -313,10 +321,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
-  },
-  errorText: {
-    color: '#D92D20',
-    textAlign: 'center',
   },
   listContent: {
     paddingHorizontal: Spacing.four,

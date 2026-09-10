@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AvailabilityCalendar } from '@/components/availability-calendar';
 import { isSameDay, startOfMonth } from '@/components/date-range-calendar';
+import { ErrorState } from '@/components/error-state';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -29,6 +30,7 @@ import {
   type NewSlot,
 } from '@/services/bookings';
 import { getListingById, type ListingDetail } from '@/services/listings';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 const DURATION_OPTIONS = [15, 30, 45, 60, 90, 120];
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -91,25 +93,24 @@ export default function ManageAvailabilityScreen() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  const loadListing = useCallback(async () => {
+    if (!id) return;
+    setIsLoading(true);
+    const { data, error } = await getListingById(id);
+    if (error || !data) {
+      if (error) console.error('loadListing: failed to load listing', error);
+      setLoadError(error ? getFriendlyErrorMessage(error) : 'Listing not found.');
+    } else {
+      setLoadError(null);
+      setListing(data);
+    }
+    setIsLoading(false);
+  }, [id]);
+
   useFocusEffect(
     useCallback(() => {
-      if (!id) return;
-      let cancelled = false;
-      setIsLoading(true);
-      getListingById(id).then(({ data, error }) => {
-        if (cancelled) return;
-        if (error || !data) {
-          setLoadError(error?.message ?? 'Listing not found.');
-        } else {
-          setLoadError(null);
-          setListing(data);
-        }
-        setIsLoading(false);
-      });
-      return () => {
-        cancelled = true;
-      };
-    }, [id]),
+      loadListing();
+    }, [loadListing]),
   );
 
   const currentListingIdRef = useRef(id);
@@ -133,7 +134,8 @@ export default function ManageAvailabilityScreen() {
       return;
     }
     if (error) {
-      setSlotsError(error.message);
+      console.error('loadSlots: failed to load availability slots', error);
+      setSlotsError(getFriendlyErrorMessage(error));
     } else {
       setSlotsError(null);
       setSlots(data);
@@ -220,7 +222,7 @@ export default function ManageAvailabilityScreen() {
         listingSellerId: listing?.seller_id,
         currentUserId: userId,
       });
-      setGenerationError(error.message);
+      setGenerationError(getFriendlyErrorMessage(error));
       return;
     }
 
@@ -265,7 +267,7 @@ export default function ManageAvailabilityScreen() {
         listingSellerId: listing?.seller_id,
         currentUserId: userId,
       });
-      setGenerationError(error.message);
+      setGenerationError(getFriendlyErrorMessage(error));
       return;
     }
 
@@ -285,7 +287,8 @@ export default function ManageAvailabilityScreen() {
           const { error } = await deleteSlot(slot.id);
           setDeletingSlotId(null);
           if (error) {
-            setSlotsError(error.message);
+            console.error('handleDeleteSlot: failed to delete slot', error);
+            setSlotsError(getFriendlyErrorMessage(error));
             return;
           }
           setSlots((prev) => prev.filter((s) => s.id !== slot.id));
@@ -316,8 +319,10 @@ export default function ManageAvailabilityScreen() {
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          {loadError || !listing ? (
-            <ThemedText style={styles.errorText}>{loadError ?? 'Listing not found.'}</ThemedText>
+          {loadError ? (
+            <ErrorState message={loadError} onRetry={loadListing} isRetrying={isLoading} />
+          ) : !listing ? (
+            <ThemedText style={styles.errorText}>Listing not found.</ThemedText>
           ) : (
             <>
               <ThemedText themeColor="textSecondary" style={styles.subtitle}>
@@ -460,7 +465,14 @@ export default function ManageAvailabilityScreen() {
                 {isLoadingSlots ? (
                   <ActivityIndicator style={styles.slotsSpacing} />
                 ) : slotsError ? (
-                  <ThemedText style={[styles.errorText, styles.slotsSpacing]}>{slotsError}</ThemedText>
+                  <View style={styles.slotsSpacing}>
+                    <ThemedText style={styles.errorText}>{slotsError}</ThemedText>
+                    <Pressable onPress={loadSlots} hitSlop={8} disabled={isLoadingSlots}>
+                      <ThemedText type="linkPrimary" style={styles.retryLinkText}>
+                        Try again
+                      </ThemedText>
+                    </Pressable>
+                  </View>
                 ) : slots.length === 0 ? (
                   <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
                     No availability added yet.
@@ -609,6 +621,9 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#D92D20',
+  },
+  retryLinkText: {
+    marginTop: Spacing.half,
   },
   pressed: {
     opacity: 0.85,

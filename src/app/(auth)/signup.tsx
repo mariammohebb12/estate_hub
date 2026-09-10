@@ -8,6 +8,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { signUpWithEmail } from '@/services/auth';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 export default function SignupScreen() {
   const theme = useTheme();
@@ -29,7 +30,8 @@ export default function SignupScreen() {
     setIsSubmitting(false);
 
     if (error) {
-      setErrorMessage(error.message);
+      console.error('handleSignup: failed to sign up', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     }
     // On success, AuthProvider picks up the new session and routes into the tabs
     // (unless the project requires email confirmation, in which case there's no

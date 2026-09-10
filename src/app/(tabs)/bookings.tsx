@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ErrorState } from '@/components/error-state';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -12,6 +13,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
 import { useMode } from '@/providers/mode-provider';
 import { getBookingsOnMyListings, getMyBookings, type BookingRow } from '@/services/bookings';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 const dateFormatter = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const timeFormatter = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -77,7 +79,8 @@ export default function BookingsScreen() {
     if (!userId) return;
     const { data, error } = isSelling ? await getBookingsOnMyListings(userId) : await getMyBookings(userId);
     if (error) {
-      setErrorMessage(error.message);
+      console.error('loadBookings: failed to load bookings', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     } else {
       setErrorMessage(null);
       setBookings(data);
@@ -97,6 +100,11 @@ export default function BookingsScreen() {
     setIsRefreshing(false);
   };
 
+  const handleRetry = () => {
+    setIsLoading(true);
+    loadBookings().finally(() => setIsLoading(false));
+  };
+
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -104,13 +112,13 @@ export default function BookingsScreen() {
           Bookings
         </ThemedText>
 
-        {isLoading ? (
+        {isLoading && bookings.length === 0 ? (
           <ThemedView style={styles.centered}>
             <ActivityIndicator />
           </ThemedView>
         ) : errorMessage ? (
           <ThemedView style={styles.centered}>
-            <ThemedText style={styles.errorText}>{errorMessage}</ThemedText>
+            <ErrorState message={errorMessage} onRetry={handleRetry} isRetrying={isLoading} />
           </ThemedView>
         ) : bookings.length === 0 ? (
           <ThemedView style={styles.centered}>
@@ -314,10 +322,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   emptySubtitle: {
-    textAlign: 'center',
-  },
-  errorText: {
-    color: '#D92D20',
     textAlign: 'center',
   },
   listContent: {

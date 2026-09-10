@@ -9,6 +9,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { completePasswordRecovery, updatePassword } from '@/services/auth';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 type RecoveryStatus = 'pending' | 'ready' | 'invalid';
 
@@ -53,8 +54,9 @@ export default function ResetPasswordScreen() {
       if (cancelled) return;
 
       if (error) {
+        console.error('reset-password: failed to complete password recovery', error);
         setRecoveryStatus('invalid');
-        setRecoveryError(error.message);
+        setRecoveryError(getFriendlyErrorMessage(error));
       } else {
         setRecoveryStatus('ready');
       }
@@ -100,7 +102,8 @@ export default function ResetPasswordScreen() {
     setIsSaving(false);
 
     if (error) {
-      setSaveError(error.message);
+      console.error('handleSave: failed to update password', error);
+      setSaveError(getFriendlyErrorMessage(error));
     } else {
       setIsSaved(true);
     }

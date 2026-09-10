@@ -5,6 +5,7 @@ import { useColorScheme } from 'react-native';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AuthProvider, useAuth } from '@/providers/auth-provider';
 import { ModeProvider } from '@/providers/mode-provider';
+import { ToastProvider } from '@/providers/toast-provider';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -52,7 +53,9 @@ export default function RootLayout() {
       <AuthProvider>
         <AnimatedSplashOverlay />
         <ModeProvider>
-          <RootNavigator />
+          <ToastProvider>
+            <RootNavigator />
+          </ToastProvider>
         </ModeProvider>
       </AuthProvider>
     </ThemeProvider>

@@ -4,12 +4,14 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ErrorState } from '@/components/error-state';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTabBarClearance } from '@/hooks/use-tab-bar-clearance';
 import { useTheme } from '@/hooks/use-theme';
 import { getMyListings, type MyListing } from '@/services/listings';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -77,7 +79,8 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
   const loadMyListings = useCallback(async () => {
     const { data, error } = await getMyListings(userId);
     if (error) {
-      setErrorMessage(error.message);
+      console.error('loadMyListings: failed to load listings', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     } else {
       setErrorMessage(null);
       setListings(data);
@@ -97,6 +100,11 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
     setIsRefreshing(false);
   };
 
+  const handleRetry = () => {
+    setIsLoading(true);
+    loadMyListings().finally(() => setIsLoading(false));
+  };
+
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -111,13 +119,13 @@ export function MyListingsView({ userId }: MyListingsViewProps) {
           </Pressable>
         </View>
 
-        {isLoading ? (
+        {isLoading && listings.length === 0 ? (
           <ThemedView style={styles.centered}>
             <ActivityIndicator />
           </ThemedView>
         ) : errorMessage ? (
           <ThemedView style={styles.centered}>
-            <ThemedText style={styles.errorText}>{errorMessage}</ThemedText>
+            <ErrorState message={errorMessage} onRetry={handleRetry} isRetrying={isLoading} />
           </ThemedView>
         ) : listings.length === 0 ? (
           <ThemedView style={styles.centered}>
@@ -213,10 +221,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   emptySubtitle: {
-    textAlign: 'center',
-  },
-  errorText: {
-    color: '#D92D20',
     textAlign: 'center',
   },
   listContent: {

@@ -3,20 +3,24 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ErrorState } from '@/components/error-state';
 import { ListingCard } from '@/components/listing-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTabBarClearance } from '@/hooks/use-tab-bar-clearance';
 import { useAuth } from '@/providers/auth-provider';
+import { useToast } from '@/providers/toast-provider';
 import { getFavoritedListings, removeFavorite } from '@/services/favorites';
 import type { Listing } from '@/services/listings';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 export default function FavoritesScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user.id;
   const tabBarClearance = useTabBarClearance();
+  const { showToast } = useToast();
 
   const [listings, setListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -27,7 +31,8 @@ export default function FavoritesScreen() {
     if (!userId) return;
     const { data, error } = await getFavoritedListings(userId);
     if (error) {
-      setErrorMessage(error.message);
+      console.error('loadFavorites: failed to load favorites', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     } else {
       setErrorMessage(null);
       setListings(data);
@@ -47,15 +52,23 @@ export default function FavoritesScreen() {
     setIsRefreshing(false);
   };
 
+  const handleRetry = () => {
+    setIsLoading(true);
+    loadFavorites().finally(() => setIsLoading(false));
+  };
+
   const handleUnfavorite = async (listingId: string) => {
     if (!userId) return;
     const previousListings = listings;
     setListings((prev) => prev.filter((listing) => listing.id !== listingId));
 
-    const { error } = await removeFavorite(userId, listingId);
-    if (error) {
+    try {
+      const { error } = await removeFavorite(userId, listingId);
+      if (error) throw error;
+    } catch (error) {
       console.error('handleUnfavorite: failed to remove favorite', error);
       setListings(previousListings);
+      showToast(getFriendlyErrorMessage(error));
     }
   };
 
@@ -72,7 +85,7 @@ export default function FavoritesScreen() {
           </ThemedView>
         ) : errorMessage ? (
           <ThemedView style={styles.centered}>
-            <ThemedText style={styles.errorText}>{errorMessage}</ThemedText>
+            <ErrorState message={errorMessage} onRetry={handleRetry} isRetrying={isLoading} />
           </ThemedView>
         ) : listings.length === 0 ? (
           <ThemedView style={styles.centered}>
@@ -122,10 +135,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
-  },
-  errorText: {
-    color: '#D92D20',
-    textAlign: 'center',
   },
   listContent: {
     paddingHorizontal: Spacing.four,

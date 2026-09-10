@@ -28,6 +28,7 @@ import { useMode } from '@/providers/mode-provider';
 import { signOut, updatePassword, verifyPassword } from '@/services/auth';
 import { getProfile, updateProfile, uploadAvatar } from '@/services/profile';
 import type { UserMode } from '@/services/profile';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 function getInitials(name: string | null, email: string | null) {
   const source = name?.trim() || email?.trim() || '';
@@ -368,7 +369,8 @@ export default function ProfileScreen() {
     setIsChangingPassword(false);
 
     if (updateError) {
-      setPasswordFeedback({ type: 'error', message: updateError.message });
+      console.error('handleChangePassword: failed to update password', updateError);
+      setPasswordFeedback({ type: 'error', message: getFriendlyErrorMessage(updateError) });
     } else {
       setPasswordFeedback({ type: 'success', message: 'Password updated.' });
       setCurrentPassword('');
@@ -384,7 +386,8 @@ export default function ProfileScreen() {
     setIsSigningOut(false);
 
     if (error) {
-      setLogoutError(error.message);
+      console.error('handleLogout: failed to sign out', error);
+      setLogoutError(getFriendlyErrorMessage(error));
     }
     // On success, AuthProvider picks up the cleared session and routes back to the auth stack.
   };

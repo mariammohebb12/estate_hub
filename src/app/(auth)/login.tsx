@@ -8,6 +8,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { signInWithEmail } from '@/services/auth';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 export default function LoginScreen() {
   const theme = useTheme();
@@ -29,7 +30,8 @@ export default function LoginScreen() {
     setIsSubmitting(false);
 
     if (error) {
-      setErrorMessage(error.message);
+      console.error('handleLogin: failed to sign in', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     }
     // On success, AuthProvider picks up the new session and routes into the tabs.
   };
