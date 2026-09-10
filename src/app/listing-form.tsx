@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AvailabilitySlotForm } from '@/components/availability-slot-form';
 import { ErrorState } from '@/components/error-state';
 import { LocationPickerModal, type LocationPickerResult } from '@/components/location-picker-modal';
 import { ThemedText } from '@/components/themed-text';
@@ -25,7 +26,7 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
 import { enhanceListingText, type EnhanceTextField } from '@/services/ai-enhance';
-import { clearFutureAvailability, hasAvailabilitySlots } from '@/services/bookings';
+import { clearFutureAvailability, createSlots, hasAvailabilitySlots, type NewSlot } from '@/services/bookings';
 import { deleteListingPhoto, getListingPhotos, uploadListingPhoto, type ListingPhoto } from '@/services/listing-photos';
 import {
   createListing,
@@ -42,6 +43,34 @@ import {
 import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 const LISTING_TYPES = ['buy', 'rent'] as const;
+
+const AMENITY_OPTIONS = [
+  'WiFi',
+  'Parking',
+  'Pool',
+  'Garden',
+  'AC',
+  'Balcony',
+  'Furnished',
+  'Storage',
+  'Elevator',
+  'Security',
+  'Gym',
+  'Pet Friendly',
+  'Other',
+] as const;
+
+const STYLE_TAG_OPTIONS = [
+  'Modern',
+  'Cozy',
+  'Luxury',
+  'Minimalist',
+  'Beachfront',
+  'Family-friendly',
+  'Urban',
+  'Traditional',
+  'Other',
+] as const;
 
 const STATUS_LABELS: Record<ListingStatus, string> = {
   available: 'Available',
@@ -77,11 +106,39 @@ function confirmListingTypeChange() {
   });
 }
 
-function parseTagInput(value: string) {
-  return value
-    .split(',')
-    .map((tag) => tag.trim())
-    .filter(Boolean);
+function splitTagValues(values: string[], options: readonly string[]) {
+  const predefinedOptions = options.filter((option) => option !== 'Other');
+  const selected = values.filter((value) => predefinedOptions.includes(value));
+  const customValues = values.filter((value) => !predefinedOptions.includes(value));
+  return {
+    selected: customValues.length > 0 ? [...selected, 'Other'] : selected,
+    otherText: customValues.join(', '),
+  };
+}
+
+function buildTagValues(selected: string[], otherText: string) {
+  const predefinedSelected = selected.filter((value) => value !== 'Other');
+  if (selected.includes('Other') && otherText.trim()) {
+    return [...predefinedSelected, otherText.trim()];
+  }
+  return predefinedSelected;
+}
+
+const pendingSlotDateFormatter = new Intl.DateTimeFormat('en-US', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+});
+const pendingSlotTimeFormatter = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+const pendingSlotDayFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+
+function formatPendingSlot(slot: NewSlot, listingType: 'buy' | 'rent') {
+  const start = new Date(slot.start_time);
+  const end = new Date(slot.end_time);
+  if (listingType === 'rent') {
+    return `${pendingSlotDayFormatter.format(start)} - ${pendingSlotDayFormatter.format(end)}`;
+  }
+  return `${pendingSlotDateFormatter.format(start)}, ${pendingSlotTimeFormatter.format(start)}–${pendingSlotTimeFormatter.format(end)}`;
 }
 
 type NumberFieldResult = { value: number | null; error?: string };
@@ -131,8 +188,13 @@ export default function ListingFormScreen() {
   const [longitude, setLongitude] = useState<number | null>(null);
   const [isLocationPickerVisible, setIsLocationPickerVisible] = useState(false);
   const [areaSqm, setAreaSqm] = useState('');
-  const [amenities, setAmenities] = useState('');
-  const [styleTags, setStyleTags] = useState('');
+  const [amenitiesSelected, setAmenitiesSelected] = useState<string[]>([]);
+  const [amenitiesOtherText, setAmenitiesOtherText] = useState('');
+  const [styleTagsSelected, setStyleTagsSelected] = useState<string[]>([]);
+  const [styleTagsOtherText, setStyleTagsOtherText] = useState('');
+  const [isAmenitiesSheetVisible, setIsAmenitiesSheetVisible] = useState(false);
+  const [isStyleTagsSheetVisible, setIsStyleTagsSheetVisible] = useState(false);
+  const [isAvailabilitySheetVisible, setIsAvailabilitySheetVisible] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -148,6 +210,30 @@ export default function ListingFormScreen() {
   const [pendingPhotos, setPendingPhotos] = useState<{ uri: string }[]>([]);
   const [removingPhotoId, setRemovingPhotoId] = useState<string | null>(null);
   const [photosError, setPhotosError] = useState<string | null>(null);
+
+  // New-listing-only: availability slots staged locally until the listing
+  // itself is created (there's no listing_id to attach them to yet). Created
+  // together with the listing in the same handleSubmit call — see there.
+  const [pendingSlots, setPendingSlots] = useState<(NewSlot & { id: string })[]>([]);
+  const pendingSlotIdRef = useRef(0);
+
+  useEffect(() => {
+    // Buy-mode viewing slots and rent-mode date ranges aren't interchangeable
+    // — drop anything staged under the previous listing type when it changes.
+    setPendingSlots([]);
+  }, [listingType]);
+
+  const handleStagePendingSlots = async (newSlots: NewSlot[]) => {
+    setPendingSlots((prev) => [
+      ...prev,
+      ...newSlots.map((slot) => ({ ...slot, id: `pending-${pendingSlotIdRef.current++}` })),
+    ]);
+    return { error: null };
+  };
+
+  const handleRemovePendingSlot = (slotId: string) => {
+    setPendingSlots((prev) => prev.filter((slot) => slot.id !== slotId));
+  };
 
   const loadListing = useCallback(async () => {
     if (!id) return;
@@ -174,8 +260,12 @@ export default function ListingFormScreen() {
     setLatitude(data.latitude ?? null);
     setLongitude(data.longitude ?? null);
     setAreaSqm(data.area_sqm != null ? String(data.area_sqm) : '');
-    setAmenities((data.amenities ?? []).join(', '));
-    setStyleTags((data.style_tags ?? []).join(', '));
+    const amenitiesSplit = splitTagValues(data.amenities ?? [], AMENITY_OPTIONS);
+    setAmenitiesSelected(amenitiesSplit.selected);
+    setAmenitiesOtherText(amenitiesSplit.otherText);
+    const styleTagsSplit = splitTagValues(data.style_tags ?? [], STYLE_TAG_OPTIONS);
+    setStyleTagsSelected(styleTagsSplit.selected);
+    setStyleTagsOtherText(styleTagsSplit.otherText);
     setIsLoading(false);
   }, [id]);
 
@@ -293,8 +383,8 @@ export default function ListingFormScreen() {
       latitude,
       longitude,
       area_sqm: areaResult.value,
-      amenities: parseTagInput(amenities),
-      style_tags: parseTagInput(styleTags),
+      amenities: buildTagValues(amenitiesSelected, amenitiesOtherText),
+      style_tags: buildTagValues(styleTagsSelected, styleTagsOtherText),
     };
 
     setIsSubmitting(true);
@@ -318,6 +408,21 @@ export default function ListingFormScreen() {
         return;
       }
       listingId = data.id;
+
+      if (pendingSlots.length > 0) {
+        const { error: slotsError } = await createSlots(
+          listingId,
+          pendingSlots.map(({ start_time, end_time }) => ({ start_time, end_time })),
+        );
+        if (slotsError) {
+          console.error('handleSubmit: failed to create availability slots for new listing', slotsError, {
+            listingId,
+          });
+          setIsSubmitting(false);
+          setFormError('Listing saved, but availability failed to save. You can add it from Manage Availability.');
+          return;
+        }
+      }
     }
 
     if (listingId && pendingPhotos.length > 0) {
@@ -350,6 +455,13 @@ export default function ListingFormScreen() {
     setIsSubmitting(false);
     router.back();
   };
+
+  const toggleTagSelection = (setSelected: (updater: (prev: string[]) => string[]) => void, value: string) => {
+    setSelected((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]));
+  };
+
+  const amenitiesValues = buildTagValues(amenitiesSelected, amenitiesOtherText);
+  const styleTagsValues = buildTagValues(styleTagsSelected, styleTagsOtherText);
 
   const handleConfirmLocation = ({ address, latitude: pickedLat, longitude: pickedLng }: LocationPickerResult) => {
     setLocationText(address);
@@ -751,24 +863,68 @@ export default function ListingFormScreen() {
                 )}
               </Field>
 
-              <Field label="Amenities (comma-separated)">
-                <TextInput
-                  value={amenities}
-                  onChangeText={setAmenities}
-                  placeholder="Pool, Garage, Garden"
-                  placeholderTextColor={theme.textSecondary}
-                  style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                />
+              <Field label="Amenities">
+                {amenitiesValues.length > 0 ? (
+                  <View style={[styles.tagPreview, { backgroundColor: theme.backgroundElement }]}>
+                    <View style={styles.tagPreviewChips}>
+                      {amenitiesValues.map((value) => (
+                        <View key={value} style={[styles.compactChip, { backgroundColor: theme.backgroundSelected }]}>
+                          <ThemedText type="small" numberOfLines={1}>
+                            {value}
+                          </ThemedText>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={styles.tagPreviewFooter}>
+                      <Pressable onPress={() => setIsAmenitiesSheetVisible(true)} hitSlop={8}>
+                        <ThemedText type="small" style={styles.locationRepickText}>
+                          Edit
+                        </ThemedText>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <Pressable
+                    onPress={() => setIsAmenitiesSheetVisible(true)}
+                    style={[styles.locationPickButton, { backgroundColor: theme.backgroundElement }]}>
+                    <SymbolView name={{ ios: 'plus', android: 'add', web: 'add' }} tintColor={theme.text} size={16} />
+                    <ThemedText type="small" style={styles.locationPickButtonText}>
+                      Add Amenities
+                    </ThemedText>
+                  </Pressable>
+                )}
               </Field>
 
-              <Field label="Style tags (comma-separated)">
-                <TextInput
-                  value={styleTags}
-                  onChangeText={setStyleTags}
-                  placeholder="Modern, Beachfront"
-                  placeholderTextColor={theme.textSecondary}
-                  style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                />
+              <Field label="Style tags">
+                {styleTagsValues.length > 0 ? (
+                  <View style={[styles.tagPreview, { backgroundColor: theme.backgroundElement }]}>
+                    <View style={styles.tagPreviewChips}>
+                      {styleTagsValues.map((value) => (
+                        <View key={value} style={[styles.compactChip, { backgroundColor: theme.backgroundSelected }]}>
+                          <ThemedText type="small" numberOfLines={1}>
+                            {value}
+                          </ThemedText>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={styles.tagPreviewFooter}>
+                      <Pressable onPress={() => setIsStyleTagsSheetVisible(true)} hitSlop={8}>
+                        <ThemedText type="small" style={styles.locationRepickText}>
+                          Edit
+                        </ThemedText>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <Pressable
+                    onPress={() => setIsStyleTagsSheetVisible(true)}
+                    style={[styles.locationPickButton, { backgroundColor: theme.backgroundElement }]}>
+                    <SymbolView name={{ ios: 'plus', android: 'add', web: 'add' }} tintColor={theme.text} size={16} />
+                    <ThemedText type="small" style={styles.locationPickButtonText}>
+                      Add Style Tags
+                    </ThemedText>
+                  </Pressable>
+                )}
               </Field>
 
               {formError ? <ThemedText style={styles.errorText}>{formError}</ThemedText> : null}
@@ -790,16 +946,25 @@ export default function ListingFormScreen() {
                 )}
               </Pressable>
 
-              {isEditing ? (
-                <Pressable
-                  onPress={() => router.push({ pathname: '/manage-availability', params: { id: id! } })}
-                  style={({ pressed }) => [
-                    styles.secondaryButton,
-                    { borderColor: theme.backgroundSelected },
-                    pressed && styles.pressed,
-                  ]}>
-                  <ThemedText>Manage Availability</ThemedText>
-                </Pressable>
+              <Pressable
+                onPress={() => {
+                  if (isEditing) {
+                    router.push({ pathname: '/manage-availability', params: { id: id! } });
+                  } else {
+                    setIsAvailabilitySheetVisible(true);
+                  }
+                }}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  { borderColor: theme.backgroundSelected },
+                  pressed && styles.pressed,
+                ]}>
+                <ThemedText>Manage Availability</ThemedText>
+              </Pressable>
+              {!isEditing ? (
+                <ThemedText type="small" themeColor="textSecondary" style={styles.availabilityHint}>
+                  Optional — add availability now, or skip and set it up later after the listing is created.
+                </ThemedText>
               ) : null}
 
               {isEditing ? (
@@ -872,6 +1037,107 @@ export default function ListingFormScreen() {
         initialLongitude={longitude}
         initialAddress={locationText || null}
       />
+
+      <TagPickerSheet
+        visible={isAmenitiesSheetVisible}
+        title="Amenities"
+        options={AMENITY_OPTIONS}
+        selected={amenitiesSelected}
+        otherText={amenitiesOtherText}
+        onToggle={(value) => toggleTagSelection(setAmenitiesSelected, value)}
+        onChangeOtherText={setAmenitiesOtherText}
+        onClose={() => setIsAmenitiesSheetVisible(false)}
+      />
+
+      <TagPickerSheet
+        visible={isStyleTagsSheetVisible}
+        title="Style tags"
+        options={STYLE_TAG_OPTIONS}
+        selected={styleTagsSelected}
+        otherText={styleTagsOtherText}
+        onToggle={(value) => toggleTagSelection(setStyleTagsSelected, value)}
+        onChangeOtherText={setStyleTagsOtherText}
+        onClose={() => setIsStyleTagsSheetVisible(false)}
+      />
+
+      {/*
+        New-listing-only: mirrors the edit flow's dedicated Manage Availability
+        screen (same header/card/list layout, same AvailabilitySlotForm), but
+        as a full-screen Modal instead of a route push — there's no listing_id
+        yet to navigate a route to, so slots stay staged in pendingSlots until
+        handleSubmit creates the listing and attaches them right after.
+      */}
+      <Modal
+        visible={isAvailabilitySheetVisible}
+        animationType="slide"
+        onRequestClose={() => setIsAvailabilitySheetVisible(false)}
+        presentationStyle="fullScreen">
+        <ThemedView style={styles.container}>
+          {/*
+            This Modal is nested inside listing-form, which the router already
+            presents with presentation: 'modal' — a modal-within-modal. In
+            that case react-native-safe-area-context's SafeAreaView can't be
+            trusted to re-measure insets correctly for the inner Modal's own
+            native root, so instead of another nested SafeAreaView here, use
+            the insets already measured in the outer (non-modal-nested) scope
+            above and apply the top inset explicitly.
+          */}
+          <View style={[styles.safeArea, { paddingTop: insets.top }]}>
+            <View style={styles.header}>
+              <Pressable onPress={() => setIsAvailabilitySheetVisible(false)} hitSlop={8}>
+                <SymbolView name={{ ios: 'xmark', android: 'close', web: 'close' }} tintColor={theme.text} size={22} />
+              </Pressable>
+              <ThemedText type="smallBold">Manage Availability</ThemedText>
+              <View style={{ width: 22 }} />
+            </View>
+
+            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+              <ThemedText themeColor="textSecondary" style={styles.availabilitySheetSubtitle}>
+                {title.trim() || 'New listing'} · {listingType === 'rent' ? 'Rental dates' : 'Viewing slots'}
+              </ThemedText>
+
+              <ThemedView style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+                <ThemedText type="smallBold">
+                  {listingType === 'rent' ? 'Add a rental period' : 'Add viewing slots'}
+                </ThemedText>
+                <AvailabilitySlotForm listingType={listingType} onSubmitSlots={handleStagePendingSlots} />
+              </ThemedView>
+
+              <View style={styles.field}>
+                <ThemedText type="smallBold">
+                  {listingType === 'rent' ? 'Staged rental periods' : 'Staged viewing slots'}
+                </ThemedText>
+                {pendingSlots.length === 0 ? (
+                  <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
+                    No availability added yet.
+                  </ThemedText>
+                ) : (
+                  <View style={[styles.slotsList, styles.slotsSpacing]}>
+                    {pendingSlots.map((slot) => (
+                      <View key={slot.id} style={[styles.slotRow, { backgroundColor: theme.backgroundElement }]}>
+                        <ThemedText type="small">{formatPendingSlot(slot, listingType)}</ThemedText>
+                        <Pressable onPress={() => handleRemovePendingSlot(slot.id)} hitSlop={8}>
+                          <SymbolView
+                            name={{ ios: 'trash', android: 'delete', web: 'delete' }}
+                            tintColor="#D92D20"
+                            size={18}
+                          />
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <Pressable
+                onPress={() => setIsAvailabilitySheetVisible(false)}
+                style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
+                <ThemedText style={styles.primaryButtonText}>Done</ThemedText>
+              </Pressable>
+            </ScrollView>
+          </View>
+        </ThemedView>
+      </Modal>
     </ThemedView>
   );
 }
@@ -955,6 +1221,86 @@ function EnhanceSuggestion({
   );
 }
 
+function TagPickerSheet({
+  visible,
+  title,
+  options,
+  selected,
+  otherText,
+  onToggle,
+  onChangeOtherText,
+  onClose,
+}: {
+  visible: boolean;
+  title: string;
+  options: readonly string[];
+  selected: string[];
+  otherText: string;
+  onToggle: (value: string) => void;
+  onChangeOtherText: (value: string) => void;
+  onClose: () => void;
+}) {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose} />
+      <View style={styles.tagSheetContainer} pointerEvents="box-none">
+        <ThemedView
+          style={[
+            styles.sheet,
+            styles.tagSheet,
+            { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.four },
+          ]}>
+          <View style={styles.sheetHeader}>
+            <ThemedText type="smallBold">{title}</ThemedText>
+            <Pressable onPress={onClose} hitSlop={8}>
+              <View style={[styles.closeButton, { backgroundColor: theme.backgroundElement }]}>
+                <SymbolView name={{ ios: 'xmark', android: 'close', web: 'close' }} tintColor={theme.text} size={16} />
+              </View>
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={styles.sheetScroll}
+            contentContainerStyle={styles.sheetScrollContent}
+            keyboardShouldPersistTaps="handled">
+            <View style={styles.pillRow}>
+              {options.map((value) => {
+                const isSelected = selected.includes(value);
+                return (
+                  <Pressable
+                    key={value}
+                    onPress={() => onToggle(value)}
+                    style={[styles.pill, { backgroundColor: isSelected ? theme.text : theme.backgroundElement }]}>
+                    <ThemedText type="small" style={{ color: isSelected ? theme.background : theme.text }}>
+                      {value}
+                    </ThemedText>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {selected.includes('Other') ? (
+              <TextInput
+                value={otherText}
+                onChangeText={onChangeOtherText}
+                placeholder="Enter custom value"
+                placeholderTextColor={theme.textSecondary}
+                style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+              />
+            ) : null}
+          </ScrollView>
+
+          <Pressable onPress={onClose} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
+            <ThemedText style={styles.primaryButtonText}>Done</ThemedText>
+          </Pressable>
+        </ThemedView>
+      </View>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -981,6 +1327,25 @@ const styles = StyleSheet.create({
   },
   field: {
     gap: Spacing.one,
+  },
+  card: {
+    borderRadius: Spacing.four,
+    padding: Spacing.four,
+    gap: Spacing.three,
+  },
+  slotsSpacing: {
+    marginTop: Spacing.one,
+  },
+  slotsList: {
+    gap: Spacing.two,
+  },
+  slotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+    borderRadius: Spacing.three,
   },
   fieldLabelRow: {
     flexDirection: 'row',
@@ -1129,6 +1494,46 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     borderRadius: Spacing.five,
   },
+  tagPreview: {
+    gap: Spacing.two,
+    padding: Spacing.three,
+    borderRadius: Spacing.three,
+  },
+  tagPreviewChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  tagPreviewFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  compactChip: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+    borderRadius: Spacing.five,
+  },
+  tagSheetContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'flex-end',
+  },
+  tagSheet: {
+    maxHeight: '75%',
+    overflow: 'hidden',
+  },
+  sheetScroll: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
+  },
+  sheetScrollContent: {
+    gap: Spacing.three,
+    paddingBottom: Spacing.two,
+  },
   primaryButton: {
     height: 52,
     borderRadius: Spacing.three,
@@ -1147,6 +1552,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  availabilityHint: {
+    marginTop: -Spacing.two,
+  },
+  availabilitySheetSubtitle: {
+    marginTop: -Spacing.two,
   },
   photoGrid: {
     flexDirection: 'row',

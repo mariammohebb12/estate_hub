@@ -1,55 +1,23 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-  type StyleProp,
-  type ViewStyle,
-} from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AvailabilityCalendar } from '@/components/availability-calendar';
-import { isSameDay, startOfMonth } from '@/components/date-range-calendar';
+import { AvailabilitySlotForm } from '@/components/availability-slot-form';
 import { ErrorState } from '@/components/error-state';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
-import {
-  createSlots,
-  deleteSlot,
-  getSlotsForListing,
-  type AvailabilitySlot,
-  type NewSlot,
-} from '@/services/bookings';
+import { createSlots, deleteSlot, getSlotsForListing, type AvailabilitySlot } from '@/services/bookings';
 import { getListingById, type ListingDetail } from '@/services/listings';
 import { getFriendlyErrorMessage } from '@/utils/error-message';
-
-const DURATION_OPTIONS = [15, 30, 45, 60, 90, 120];
-const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const slotDateFormatter = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const slotTimeFormatter = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 const dayFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
-const rangeLabelFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
-
-function isValidTime(value: string) {
-  return TIME_PATTERN.test(value.trim());
-}
-
-function combineDateAndTime(date: Date, hhmm: string) {
-  const [hours, minutes] = hhmm.split(':').map(Number);
-  const result = new Date(date);
-  result.setHours(hours, minutes, 0, 0);
-  return result;
-}
 
 function formatSlotRow(slot: AvailabilitySlot, listingType: 'buy' | 'rent') {
   const start = new Date(slot.start_time);
@@ -75,23 +43,6 @@ export default function ManageAvailabilityScreen() {
   const [isLoadingSlots, setIsLoadingSlots] = useState(true);
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [deletingSlotId, setDeletingSlotId] = useState<string | null>(null);
-
-  const [calendarMonth, setCalendarMonth] = useState(() => startOfMonth(new Date()));
-
-  // Buy-mode: single date + start/end time + slot duration.
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [startTime, setStartTime] = useState('10:00');
-  const [endTime, setEndTime] = useState('13:00');
-  const [durationMinutes, setDurationMinutes] = useState(30);
-
-  // Rent-mode: date range + check-in/check-out time.
-  const [rangeStart, setRangeStart] = useState<Date | null>(null);
-  const [rangeEnd, setRangeEnd] = useState<Date | null>(null);
-  const [checkInTime, setCheckInTime] = useState('15:00');
-  const [checkOutTime, setCheckOutTime] = useState('11:00');
-
-  const [generationError, setGenerationError] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
 
   const loadListing = useCallback(async () => {
     if (!id) return;
@@ -147,133 +98,50 @@ export default function ManageAvailabilityScreen() {
     loadSlots();
   }, [loadSlots]);
 
-  const handleSelectSingleDate = (date: Date) => {
-    setGenerationError(null);
-    setSelectedDate((prev) => (prev && isSameDay(prev, date) ? null : date));
-  };
+  const handleAddBuySlots = async (newSlots: Parameters<typeof createSlots>[1]) => {
+    if (!id) return { error: 'Missing listing id.' };
 
-  const handleSelectRangeDate = (date: Date) => {
-    setGenerationError(null);
-    if (!rangeStart || rangeEnd) {
-      setRangeStart(date);
-      setRangeEnd(null);
-      return;
-    }
-    if (isSameDay(date, rangeStart)) {
-      setRangeStart(null);
-      setRangeEnd(null);
-      return;
-    }
-    const [newStart, newEnd] = date.getTime() < rangeStart.getTime() ? [date, rangeStart] : [rangeStart, date];
-    setRangeStart(newStart);
-    setRangeEnd(newEnd);
-  };
-
-  const handleGenerateBuySlots = async () => {
-    if (!id) return;
-    setGenerationError(null);
-
-    if (!selectedDate) {
-      setGenerationError('Pick a date.');
-      return;
-    }
-    if (!isValidTime(startTime) || !isValidTime(endTime)) {
-      setGenerationError('Enter times as HH:MM, e.g. 10:00.');
-      return;
-    }
-
-    const start = combineDateAndTime(selectedDate, startTime);
-    const end = combineDateAndTime(selectedDate, endTime);
-
-    if (end.getTime() <= start.getTime()) {
-      setGenerationError('End time must be after start time.');
-      return;
-    }
-
-    const durationMs = durationMinutes * 60_000;
-    const newSlots: NewSlot[] = [];
-    let cursor = start.getTime();
-    while (cursor + durationMs <= end.getTime()) {
-      newSlots.push({
-        start_time: new Date(cursor).toISOString(),
-        end_time: new Date(cursor + durationMs).toISOString(),
-      });
-      cursor += durationMs;
-    }
-
-    if (newSlots.length === 0) {
-      setGenerationError('That range is too short for one slot at this duration.');
-      return;
-    }
-
-    console.log('handleGenerateBuySlots: about to insert into availability_slots', {
+    console.log('handleAddBuySlots: about to insert into availability_slots', {
       listingId: id,
       listingSellerId: listing?.seller_id,
       currentUserId: userId,
     });
 
-    setIsGenerating(true);
     const { error } = await createSlots(id, newSlots);
-    setIsGenerating(false);
-
     if (error) {
-      console.error('handleGenerateBuySlots: failed to create availability slots', error, {
+      console.error('handleAddBuySlots: failed to create availability slots', error, {
         listingId: id,
         listingSellerId: listing?.seller_id,
         currentUserId: userId,
       });
-      setGenerationError(getFriendlyErrorMessage(error));
-      return;
+      return { error: getFriendlyErrorMessage(error) };
     }
 
-    setSelectedDate(null);
     await loadSlots();
+    return { error: null };
   };
 
-  const handleGenerateRentSlot = async () => {
-    if (!id) return;
-    setGenerationError(null);
+  const handleAddRentSlot = async (newSlots: Parameters<typeof createSlots>[1]) => {
+    if (!id) return { error: 'Missing listing id.' };
 
-    if (!rangeStart || !rangeEnd) {
-      setGenerationError('Pick a start and end date.');
-      return;
-    }
-    if (!isValidTime(checkInTime) || !isValidTime(checkOutTime)) {
-      setGenerationError('Enter times as HH:MM, e.g. 15:00.');
-      return;
-    }
-
-    const start = combineDateAndTime(rangeStart, checkInTime);
-    const end = combineDateAndTime(rangeEnd, checkOutTime);
-
-    if (end.getTime() <= start.getTime()) {
-      setGenerationError('Checkout must be after check-in.');
-      return;
-    }
-
-    console.log('handleGenerateRentSlot: about to insert into availability_slots', {
+    console.log('handleAddRentSlot: about to insert into availability_slots', {
       listingId: id,
       listingSellerId: listing?.seller_id,
       currentUserId: userId,
     });
 
-    setIsGenerating(true);
-    const { error } = await createSlots(id, [{ start_time: start.toISOString(), end_time: end.toISOString() }]);
-    setIsGenerating(false);
-
+    const { error } = await createSlots(id, newSlots);
     if (error) {
-      console.error('handleGenerateRentSlot: failed to create availability slot', error, {
+      console.error('handleAddRentSlot: failed to create availability slot', error, {
         listingId: id,
         listingSellerId: listing?.seller_id,
         currentUserId: userId,
       });
-      setGenerationError(getFriendlyErrorMessage(error));
-      return;
+      return { error: getFriendlyErrorMessage(error) };
     }
 
-    setRangeStart(null);
-    setRangeEnd(null);
     await loadSlots();
+    return { error: null };
   };
 
   const handleDeleteSlot = (slot: AvailabilitySlot) => {
@@ -332,130 +200,12 @@ export default function ManageAvailabilityScreen() {
               {listing.listing_type === 'buy' ? (
                 <ThemedView style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
                   <ThemedText type="smallBold">Add viewing slots</ThemedText>
-
-                  <AvailabilityCalendar
-                    month={calendarMonth}
-                    onMonthChange={setCalendarMonth}
-                    selectedDate={selectedDate}
-                    onSelectDate={handleSelectSingleDate}
-                  />
-
-                  <View style={styles.row}>
-                    <Field label="Start time" style={styles.flex1}>
-                      <TextInput
-                        value={startTime}
-                        onChangeText={setStartTime}
-                        placeholder="10:00"
-                        placeholderTextColor={theme.textSecondary}
-                        style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                      />
-                    </Field>
-                    <Field label="End time" style={styles.flex1}>
-                      <TextInput
-                        value={endTime}
-                        onChangeText={setEndTime}
-                        placeholder="13:00"
-                        placeholderTextColor={theme.textSecondary}
-                        style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                      />
-                    </Field>
-                  </View>
-
-                  <Field label="Slot duration">
-                    <View style={styles.pillRow}>
-                      {DURATION_OPTIONS.map((minutes) => {
-                        const selected = durationMinutes === minutes;
-                        return (
-                          <Pressable
-                            key={minutes}
-                            onPress={() => setDurationMinutes(minutes)}
-                            style={[
-                              styles.pill,
-                              { backgroundColor: selected ? theme.text : theme.background },
-                            ]}>
-                            <ThemedText type="small" style={{ color: selected ? theme.background : theme.text }}>
-                              {minutes} min
-                            </ThemedText>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </Field>
-
-                  {generationError ? <ThemedText style={styles.errorText}>{generationError}</ThemedText> : null}
-
-                  <Pressable
-                    onPress={handleGenerateBuySlots}
-                    disabled={isGenerating}
-                    style={({ pressed }) => [
-                      styles.primaryButton,
-                      pressed && styles.pressed,
-                      isGenerating && styles.disabled,
-                    ]}>
-                    {isGenerating ? (
-                      <ActivityIndicator color="#ffffff" />
-                    ) : (
-                      <ThemedText style={styles.primaryButtonText}>Generate Slots</ThemedText>
-                    )}
-                  </Pressable>
+                  <AvailabilitySlotForm listingType="buy" onSubmitSlots={handleAddBuySlots} />
                 </ThemedView>
               ) : (
                 <ThemedView style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
                   <ThemedText type="smallBold">Add a rental period</ThemedText>
-
-                  <AvailabilityCalendar
-                    month={calendarMonth}
-                    onMonthChange={setCalendarMonth}
-                    rangeStart={rangeStart}
-                    rangeEnd={rangeEnd}
-                    onSelectDate={handleSelectRangeDate}
-                  />
-
-                  {rangeStart ? (
-                    <ThemedText type="small" themeColor="textSecondary">
-                      {rangeEnd
-                        ? `${rangeLabelFormatter.format(rangeStart)} – ${rangeLabelFormatter.format(rangeEnd)}`
-                        : `${rangeLabelFormatter.format(rangeStart)} — pick an end date`}
-                    </ThemedText>
-                  ) : null}
-
-                  <View style={styles.row}>
-                    <Field label="Check-in time" style={styles.flex1}>
-                      <TextInput
-                        value={checkInTime}
-                        onChangeText={setCheckInTime}
-                        placeholder="15:00"
-                        placeholderTextColor={theme.textSecondary}
-                        style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                      />
-                    </Field>
-                    <Field label="Check-out time" style={styles.flex1}>
-                      <TextInput
-                        value={checkOutTime}
-                        onChangeText={setCheckOutTime}
-                        placeholder="11:00"
-                        placeholderTextColor={theme.textSecondary}
-                        style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                      />
-                    </Field>
-                  </View>
-
-                  {generationError ? <ThemedText style={styles.errorText}>{generationError}</ThemedText> : null}
-
-                  <Pressable
-                    onPress={handleGenerateRentSlot}
-                    disabled={isGenerating}
-                    style={({ pressed }) => [
-                      styles.primaryButton,
-                      pressed && styles.pressed,
-                      isGenerating && styles.disabled,
-                    ]}>
-                    {isGenerating ? (
-                      <ActivityIndicator color="#ffffff" />
-                    ) : (
-                      <ThemedText style={styles.primaryButtonText}>Add Rental Period</ThemedText>
-                    )}
-                  </Pressable>
+                  <AvailabilitySlotForm listingType="rent" onSubmitSlots={handleAddRentSlot} />
                 </ThemedView>
               )}
 
@@ -513,25 +263,6 @@ export default function ManageAvailabilityScreen() {
   );
 }
 
-function Field({
-  label,
-  children,
-  style,
-}: {
-  label: string;
-  children: ReactNode;
-  style?: StyleProp<ViewStyle>;
-}) {
-  return (
-    <View style={[styles.field, style]}>
-      <ThemedText type="small" themeColor="textSecondary">
-        {label}
-      </ThemedText>
-      {children}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -564,43 +295,8 @@ const styles = StyleSheet.create({
     padding: Spacing.four,
     gap: Spacing.three,
   },
-  row: {
-    flexDirection: 'row',
-    gap: Spacing.three,
-  },
-  flex1: {
-    flex: 1,
-  },
   field: {
     gap: Spacing.two,
-  },
-  input: {
-    height: 46,
-    borderRadius: Spacing.three,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.three,
-    fontSize: 15,
-  },
-  pillRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-  },
-  pill: {
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    borderRadius: Spacing.five,
-  },
-  primaryButton: {
-    height: 52,
-    borderRadius: Spacing.three,
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonText: {
-    color: '#ffffff',
-    fontWeight: '600',
   },
   slotsSpacing: {
     marginTop: Spacing.one,
