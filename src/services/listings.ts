@@ -27,6 +27,8 @@ export type ListingDetail = {
   bathrooms: number | null;
   property_type: string | null;
   location_text: string | null;
+  latitude: number | null;
+  longitude: number | null;
   area_sqm: number | null;
   amenities: string[] | null;
   style_tags: string[] | null;
@@ -133,7 +135,7 @@ export async function getListingById(id: string) {
   const { data, error } = await supabase
     .from('listings')
     .select(
-      'id, seller_id, title, description, listing_type, status, price, bedrooms, bathrooms, property_type, location_text, area_sqm, amenities, style_tags, profiles(full_name, avatar_url, phone)',
+      'id, seller_id, title, description, listing_type, status, price, bedrooms, bathrooms, property_type, location_text, latitude, longitude, area_sqm, amenities, style_tags, profiles(full_name, avatar_url, phone)',
     )
     .eq('id', id)
     .single();
@@ -164,6 +166,8 @@ export type ListingFormValues = {
   bathrooms: number | null;
   property_type: PropertyType | null;
   location_text: string;
+  latitude: number | null;
+  longitude: number | null;
   area_sqm: number | null;
   amenities: string[];
   style_tags: string[];

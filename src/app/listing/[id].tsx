@@ -8,7 +8,9 @@ import {
   Dimensions,
   FlatList,
   Image,
+  Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,15 +19,18 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DateRangeCalendar, dateCoveredBySlot, isSameDay, startOfMonth } from '@/components/date-range-calendar';
+import { ErrorState } from '@/components/error-state';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
+import { useToast } from '@/providers/toast-provider';
 import { bookSlot, getAvailableSlots, type AvailabilitySlot } from '@/services/bookings';
 import { addFavorite, getFavoritedListingIds, removeFavorite } from '@/services/favorites';
 import { getListingPhotos, type ListingPhoto } from '@/services/listing-photos';
 import { getListingById, type ListingDetail } from '@/services/listings';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 const screenWidth = Dimensions.get('window').width;
 const photoHeight = screenWidth * (3 / 4);
@@ -103,6 +108,7 @@ export default function ListingDetailScreen() {
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
   const userId = session?.user.id;
+  const { showToast } = useToast();
 
   const [listing, setListing] = useState<ListingDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -134,7 +140,8 @@ export default function ListingDetailScreen() {
     setIsLoading(true);
     const { data, error } = await getListingById(id);
     if (error) {
-      setErrorMessage(error.message);
+      console.error('loadListing: failed to load listing', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
     } else {
       setErrorMessage(null);
       setListing(data);
@@ -168,7 +175,8 @@ export default function ListingDetailScreen() {
     setIsLoadingSlots(true);
     const { data, error } = await getAvailableSlots(id);
     if (error) {
-      setSlotsError(error.message);
+      console.error('loadSlots: failed to load availability slots', error);
+      setSlotsError(getFriendlyErrorMessage(error));
     } else {
       setSlotsError(null);
       setSlots(data);
@@ -260,7 +268,8 @@ export default function ListingDetailScreen() {
       } else if (error === 'not_permitted') {
         setBookingError("Couldn't book this slot right now — please try again in a moment.");
       } else {
-        setBookingError(error);
+        console.error('handleConfirmBooking: failed to book slot', error);
+        setBookingError(getFriendlyErrorMessage(error));
       }
     } else {
       setConfirmedSlot(bookedSlot);
@@ -277,10 +286,31 @@ export default function ListingDetailScreen() {
     const wasFavorited = isFavorited;
     setIsFavorited(!wasFavorited);
 
-    const { error } = wasFavorited ? await removeFavorite(userId, id) : await addFavorite(userId, id);
-    if (error) {
+    try {
+      const { error } = wasFavorited ? await removeFavorite(userId, id) : await addFavorite(userId, id);
+      if (error) throw error;
+    } catch (error) {
       console.error('handleToggleFavorite: failed to update favorite', error);
       setIsFavorited(wasFavorited);
+      showToast(getFriendlyErrorMessage(error));
+    }
+  };
+
+  const handleOpenMaps = async () => {
+    if (!listing?.location_text) return;
+    const query = encodeURIComponent(listing.location_text);
+    const webFallbackUrl = `https://www.google.com/maps/search/?api=1&query=${query}`;
+    const url = Platform.select({
+      ios: `maps://?q=${query}`,
+      android: `geo:0,0?q=${query}`,
+      default: webFallbackUrl,
+    });
+
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      await Linking.openURL(canOpen ? url : webFallbackUrl);
+    } catch (error) {
+      console.error('handleOpenMaps: failed to open maps', error);
     }
   };
 
@@ -321,7 +351,11 @@ export default function ListingDetailScreen() {
       <ThemedView style={styles.container}>
         {headerButtons}
         <View style={styles.centered}>
-          <ThemedText style={styles.errorText}>{errorMessage ?? 'Listing not found.'}</ThemedText>
+          {errorMessage ? (
+            <ErrorState message={errorMessage} onRetry={loadListing} isRetrying={isLoading} />
+          ) : (
+            <ThemedText style={styles.errorText}>Listing not found.</ThemedText>
+          )}
         </View>
       </ThemedView>
     );
@@ -429,6 +463,35 @@ export default function ListingDetailScreen() {
             ) : null}
           </ThemedView>
 
+          {listing.location_text ? (
+            <Pressable
+              onPress={handleOpenMaps}
+              style={({ pressed }) => [
+                styles.mapCard,
+                { backgroundColor: theme.backgroundElement },
+                pressed && styles.mapCardPressed,
+              ]}>
+              <View style={[styles.mapCardIcon, { backgroundColor: theme.backgroundSelected }]}>
+                <SymbolView
+                  name={{ ios: 'map.fill', android: 'map', web: 'map' }}
+                  tintColor={theme.text}
+                  size={20}
+                />
+              </View>
+              <View style={styles.mapCardInfo}>
+                <ThemedText type="smallBold">Open in Maps</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
+                  {listing.location_text}
+                </ThemedText>
+              </View>
+              <SymbolView
+                name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                tintColor={theme.textSecondary}
+                size={18}
+              />
+            </Pressable>
+          ) : null}
+
           {stats.length > 0 ? (
             <ThemedView style={styles.section}>
               <ThemedText type="smallBold">Facilities</ThemedText>
@@ -485,7 +548,14 @@ export default function ListingDetailScreen() {
               {isLoadingSlots ? (
                 <ActivityIndicator style={styles.slotsSpacing} />
               ) : slotsError ? (
-                <ThemedText style={[styles.errorText, styles.slotsSpacing]}>{slotsError}</ThemedText>
+                <View style={styles.slotsSpacing}>
+                  <ThemedText style={styles.errorText}>{slotsError}</ThemedText>
+                  <Pressable onPress={loadSlots} hitSlop={8} disabled={isLoadingSlots}>
+                    <ThemedText type="linkPrimary" style={styles.retryLinkText}>
+                      Try again
+                    </ThemedText>
+                  </Pressable>
+                </View>
               ) : slots.length === 0 ? (
                 <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
                   No viewing times available
@@ -521,7 +591,14 @@ export default function ListingDetailScreen() {
               {isLoadingSlots ? (
                 <ActivityIndicator style={styles.slotsSpacing} />
               ) : slotsError ? (
-                <ThemedText style={[styles.errorText, styles.slotsSpacing]}>{slotsError}</ThemedText>
+                <View style={styles.slotsSpacing}>
+                  <ThemedText style={styles.errorText}>{slotsError}</ThemedText>
+                  <Pressable onPress={loadSlots} hitSlop={8} disabled={isLoadingSlots}>
+                    <ThemedText type="linkPrimary" style={styles.retryLinkText}>
+                      Try again
+                    </ThemedText>
+                  </Pressable>
+                </View>
               ) : slots.length === 0 ? (
                 <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
                   No available dates
@@ -760,6 +837,9 @@ const styles = StyleSheet.create({
     color: '#D92D20',
     textAlign: 'center',
   },
+  retryLinkText: {
+    textAlign: 'center',
+  },
   headerButtons: {
     position: 'absolute',
     left: Spacing.three,
@@ -838,6 +918,27 @@ const styles = StyleSheet.create({
   price: {
     fontSize: 24,
     lineHeight: 30,
+  },
+  mapCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    padding: Spacing.three,
+    borderRadius: Spacing.three,
+  },
+  mapCardPressed: {
+    opacity: 0.85,
+  },
+  mapCardIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapCardInfo: {
+    flex: 1,
+    gap: Spacing.half,
   },
   tileGrid: {
     flexDirection: 'row',

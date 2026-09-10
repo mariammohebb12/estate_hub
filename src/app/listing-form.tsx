@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ErrorState } from '@/components/error-state';
+import { LocationPickerModal, type LocationPickerResult } from '@/components/location-picker-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -37,6 +39,7 @@ import {
   type ListingStatus,
   type PropertyType,
 } from '@/services/listings';
+import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 const LISTING_TYPES = ['buy', 'rent'] as const;
 
@@ -81,11 +84,21 @@ function parseTagInput(value: string) {
     .filter(Boolean);
 }
 
-function parseNumberInput(value: string) {
-  if (!value.trim()) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+type NumberFieldResult = { value: number | null; error?: string };
+
+function validateNumberField(value: string, { required = false }: { required?: boolean } = {}): NumberFieldResult {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return required ? { value: null, error: 'This field is required.' } : { value: null };
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return { value: null, error: 'Enter a valid number.' };
+  }
+  return { value: parsed };
 }
+
+type FormFieldErrors = Partial<Record<'title' | 'price' | 'bedrooms' | 'bathrooms' | 'areaSqm', string>>;
 
 export default function ListingFormScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -114,6 +127,9 @@ export default function ListingFormScreen() {
   const [bathrooms, setBathrooms] = useState('');
   const [propertyType, setPropertyType] = useState<PropertyType | null>(null);
   const [locationText, setLocationText] = useState('');
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
+  const [isLocationPickerVisible, setIsLocationPickerVisible] = useState(false);
   const [areaSqm, setAreaSqm] = useState('');
   const [amenities, setAmenities] = useState('');
   const [styleTags, setStyleTags] = useState('');
@@ -121,6 +137,7 @@ export default function ListingFormScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FormFieldErrors>({});
 
   const [enhancingField, setEnhancingField] = useState<EnhanceTextField | null>(null);
   const [enhanceError, setEnhanceError] = useState<{ field: EnhanceTextField; message: string } | null>(null);
@@ -132,33 +149,43 @@ export default function ListingFormScreen() {
   const [removingPhotoId, setRemovingPhotoId] = useState<string | null>(null);
   const [photosError, setPhotosError] = useState<string | null>(null);
 
+  const loadListing = useCallback(async () => {
+    if (!id) return;
+    setLoadError(null);
+    setIsLoading(true);
+    const { data, error } = await getListingById(id);
+    if (error || !data) {
+      if (error) console.error('loadListing: failed to load listing', error);
+      setLoadError(error ? getFriendlyErrorMessage(error) : 'Listing not found.');
+      setIsLoading(false);
+      return;
+    }
+    setSellerId(data.seller_id);
+    setStatus(data.status as ListingStatus);
+    setTitle(data.title);
+    setDescription(data.description ?? '');
+    setListingType(data.listing_type);
+    setOriginalListingType(data.listing_type);
+    setPrice(String(data.price));
+    setBedrooms(data.bedrooms != null ? String(data.bedrooms) : '');
+    setBathrooms(data.bathrooms != null ? String(data.bathrooms) : '');
+    setPropertyType((data.property_type as PropertyType | null) ?? null);
+    setLocationText(data.location_text ?? '');
+    setLatitude(data.latitude ?? null);
+    setLongitude(data.longitude ?? null);
+    setAreaSqm(data.area_sqm != null ? String(data.area_sqm) : '');
+    setAmenities((data.amenities ?? []).join(', '));
+    setStyleTags((data.style_tags ?? []).join(', '));
+    setIsLoading(false);
+  }, [id]);
+
+  useEffect(() => {
+    loadListing();
+  }, [loadListing]);
+
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    setIsLoading(true);
-    getListingById(id).then(({ data, error }) => {
-      if (cancelled) return;
-      if (error || !data) {
-        setLoadError(error?.message ?? 'Listing not found.');
-        setIsLoading(false);
-        return;
-      }
-      setSellerId(data.seller_id);
-      setStatus(data.status as ListingStatus);
-      setTitle(data.title);
-      setDescription(data.description ?? '');
-      setListingType(data.listing_type);
-      setOriginalListingType(data.listing_type);
-      setPrice(String(data.price));
-      setBedrooms(data.bedrooms != null ? String(data.bedrooms) : '');
-      setBathrooms(data.bathrooms != null ? String(data.bathrooms) : '');
-      setPropertyType((data.property_type as PropertyType | null) ?? null);
-      setLocationText(data.location_text ?? '');
-      setAreaSqm(data.area_sqm != null ? String(data.area_sqm) : '');
-      setAmenities((data.amenities ?? []).join(', '));
-      setStyleTags((data.style_tags ?? []).join(', '));
-      setIsLoading(false);
-    });
     getListingPhotos(id).then(({ data, error }) => {
       if (cancelled) return;
       if (!error) {
@@ -211,21 +238,30 @@ export default function ListingFormScreen() {
     setFormError(null);
 
     const trimmedTitle = title.trim();
-    const parsedPrice = parseNumberInput(price);
+    const priceResult = validateNumberField(price, { required: true });
+    const bedroomsResult = validateNumberField(bedrooms);
+    const bathroomsResult = validateNumberField(bathrooms);
+    const areaResult = validateNumberField(areaSqm);
 
-    if (!trimmedTitle) {
-      setFormError('Title is required.');
+    const nextFieldErrors: FormFieldErrors = {};
+    if (!trimmedTitle) nextFieldErrors.title = 'Title is required.';
+    if (priceResult.error) nextFieldErrors.price = priceResult.error;
+    if (bedroomsResult.error) nextFieldErrors.bedrooms = bedroomsResult.error;
+    if (bathroomsResult.error) nextFieldErrors.bathrooms = bathroomsResult.error;
+    if (areaResult.error) nextFieldErrors.areaSqm = areaResult.error;
+
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      setFormError('Please fix the highlighted fields below.');
       return;
     }
-    if (parsedPrice == null || parsedPrice < 0) {
-      setFormError('Enter a valid price.');
-      return;
-    }
+    setFieldErrors({});
 
     if (isEditing && id && originalListingType && listingType !== originalListingType) {
       const { hasSlots, error: hasSlotsError } = await hasAvailabilitySlots(id);
       if (hasSlotsError) {
-        setFormError(hasSlotsError.message);
+        console.error('handleSubmit: failed to check availability slots', hasSlotsError);
+        setFormError(getFriendlyErrorMessage(hasSlotsError));
         return;
       }
 
@@ -236,8 +272,9 @@ export default function ListingFormScreen() {
         setIsSubmitting(true);
         const { error: clearError } = await clearFutureAvailability(id);
         if (clearError) {
+          console.error('handleSubmit: failed to clear future availability', clearError);
           setIsSubmitting(false);
-          setFormError(clearError.message);
+          setFormError(getFriendlyErrorMessage(clearError));
           return;
         }
         setIsSubmitting(false);
@@ -248,12 +285,14 @@ export default function ListingFormScreen() {
       title: trimmedTitle,
       description: description.trim(),
       listing_type: listingType,
-      price: parsedPrice,
-      bedrooms: bedrooms.trim() ? parseNumberInput(bedrooms) : null,
-      bathrooms: bathrooms.trim() ? parseNumberInput(bathrooms) : null,
+      price: priceResult.value!,
+      bedrooms: bedroomsResult.value,
+      bathrooms: bathroomsResult.value,
       property_type: propertyType,
       location_text: locationText.trim(),
-      area_sqm: areaSqm.trim() ? parseNumberInput(areaSqm) : null,
+      latitude,
+      longitude,
+      area_sqm: areaResult.value,
       amenities: parseTagInput(amenities),
       style_tags: parseTagInput(styleTags),
     };
@@ -264,16 +303,18 @@ export default function ListingFormScreen() {
     if (isEditing) {
       const { error } = await updateListing(id!, values);
       if (error) {
+        console.error('handleSubmit: failed to update listing', error);
         setIsSubmitting(false);
-        setFormError(error.message);
+        setFormError(getFriendlyErrorMessage(error));
         return;
       }
       listingId = id!;
     } else {
       const { data, error } = await createListing(userId, values);
       if (error || !data) {
+        console.error('handleSubmit: failed to create listing', error);
         setIsSubmitting(false);
-        setFormError(error?.message ?? 'Failed to create listing.');
+        setFormError(error ? getFriendlyErrorMessage(error) : 'Failed to create listing.');
         return;
       }
       listingId = data.id;
@@ -308,6 +349,13 @@ export default function ListingFormScreen() {
 
     setIsSubmitting(false);
     router.back();
+  };
+
+  const handleConfirmLocation = ({ address, latitude: pickedLat, longitude: pickedLng }: LocationPickerResult) => {
+    setLocationText(address);
+    setLatitude(pickedLat);
+    setLongitude(pickedLng);
+    setIsLocationPickerVisible(false);
   };
 
   const handleEnhance = async (field: EnhanceTextField) => {
@@ -357,7 +405,8 @@ export default function ListingFormScreen() {
     setIsUpdatingStatus(false);
 
     if (error) {
-      setStatusError(error.message ?? 'Failed to update status.');
+      console.error('handleChangeStatus: failed to update status', error);
+      setStatusError(getFriendlyErrorMessage(error));
       return;
     }
 
@@ -393,7 +442,8 @@ export default function ListingFormScreen() {
           const { error } = await deleteListing(id);
           setIsDeleting(false);
           if (error) {
-            setFormError(error.message);
+            console.error('handleDelete: failed to delete listing', error);
+            setFormError(getFriendlyErrorMessage(error));
             return;
           }
           router.back();
@@ -425,7 +475,7 @@ export default function ListingFormScreen() {
 
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           {loadError ? (
-            <ThemedText style={styles.errorText}>{loadError}</ThemedText>
+            <ErrorState message={loadError} onRetry={loadListing} isRetrying={isLoading} />
           ) : (
             <>
               {isEditing ? (
@@ -455,15 +505,22 @@ export default function ListingFormScreen() {
 
               <Field
                 label="Title"
+                error={fieldErrors.title}
                 action={
                   <EnhanceButton onPress={() => handleEnhance('title')} isLoading={enhancingField === 'title'} />
                 }>
                 <TextInput
                   value={title}
-                  onChangeText={setTitle}
+                  onChangeText={(value) => {
+                    setTitle(value);
+                    if (fieldErrors.title) setFieldErrors((prev) => ({ ...prev, title: undefined }));
+                  }}
                   placeholder="Modern 2 bedroom villa"
                   placeholderTextColor={theme.textSecondary}
-                  style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                  style={[
+                    styles.input,
+                    { color: theme.text, borderColor: fieldErrors.title ? '#D92D20' : theme.backgroundSelected },
+                  ]}
                 />
                 {enhanceError?.field === 'title' ? (
                   <ThemedText style={styles.errorText}>{enhanceError.message}</ThemedText>
@@ -592,59 +649,106 @@ export default function ListingFormScreen() {
               </Field>
 
               <View style={styles.row}>
-                <Field label="Price" style={styles.flex1}>
+                <Field label="Price" style={styles.flex1} error={fieldErrors.price}>
                   <TextInput
                     value={price}
-                    onChangeText={setPrice}
+                    onChangeText={(value) => {
+                      setPrice(value);
+                      if (fieldErrors.price) setFieldErrors((prev) => ({ ...prev, price: undefined }));
+                    }}
                     placeholder="250000"
                     placeholderTextColor={theme.textSecondary}
                     keyboardType="numeric"
-                    style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                    style={[
+                      styles.input,
+                      { color: theme.text, borderColor: fieldErrors.price ? '#D92D20' : theme.backgroundSelected },
+                    ]}
                   />
                 </Field>
-                <Field label="Area (m²)" style={styles.flex1}>
+                <Field label="Area (m²)" style={styles.flex1} error={fieldErrors.areaSqm}>
                   <TextInput
                     value={areaSqm}
-                    onChangeText={setAreaSqm}
+                    onChangeText={(value) => {
+                      setAreaSqm(value);
+                      if (fieldErrors.areaSqm) setFieldErrors((prev) => ({ ...prev, areaSqm: undefined }));
+                    }}
                     placeholder="120"
                     placeholderTextColor={theme.textSecondary}
                     keyboardType="numeric"
-                    style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                    style={[
+                      styles.input,
+                      { color: theme.text, borderColor: fieldErrors.areaSqm ? '#D92D20' : theme.backgroundSelected },
+                    ]}
                   />
                 </Field>
               </View>
 
               <View style={styles.row}>
-                <Field label="Bedrooms" style={styles.flex1}>
+                <Field label="Bedrooms" style={styles.flex1} error={fieldErrors.bedrooms}>
                   <TextInput
                     value={bedrooms}
-                    onChangeText={setBedrooms}
+                    onChangeText={(value) => {
+                      setBedrooms(value);
+                      if (fieldErrors.bedrooms) setFieldErrors((prev) => ({ ...prev, bedrooms: undefined }));
+                    }}
                     placeholder="2"
                     placeholderTextColor={theme.textSecondary}
                     keyboardType="numeric"
-                    style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                    style={[
+                      styles.input,
+                      { color: theme.text, borderColor: fieldErrors.bedrooms ? '#D92D20' : theme.backgroundSelected },
+                    ]}
                   />
                 </Field>
-                <Field label="Bathrooms" style={styles.flex1}>
+                <Field label="Bathrooms" style={styles.flex1} error={fieldErrors.bathrooms}>
                   <TextInput
                     value={bathrooms}
-                    onChangeText={setBathrooms}
+                    onChangeText={(value) => {
+                      setBathrooms(value);
+                      if (fieldErrors.bathrooms) setFieldErrors((prev) => ({ ...prev, bathrooms: undefined }));
+                    }}
                     placeholder="1"
                     placeholderTextColor={theme.textSecondary}
                     keyboardType="numeric"
-                    style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                    style={[
+                      styles.input,
+                      { color: theme.text, borderColor: fieldErrors.bathrooms ? '#D92D20' : theme.backgroundSelected },
+                    ]}
                   />
                 </Field>
               </View>
 
               <Field label="Location">
-                <TextInput
-                  value={locationText}
-                  onChangeText={setLocationText}
-                  placeholder="Miami Beach, FL"
-                  placeholderTextColor={theme.textSecondary}
-                  style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                />
+                {locationText ? (
+                  <View style={[styles.locationPreview, { backgroundColor: theme.backgroundElement }]}>
+                    <SymbolView
+                      name={{ ios: 'mappin.circle.fill', android: 'location_on', web: 'location_on' }}
+                      tintColor={theme.textSecondary}
+                      size={18}
+                    />
+                    <ThemedText type="small" style={styles.locationPreviewText} numberOfLines={2}>
+                      {locationText}
+                    </ThemedText>
+                    <Pressable onPress={() => setIsLocationPickerVisible(true)} hitSlop={8}>
+                      <ThemedText type="small" style={styles.locationRepickText}>
+                        Change
+                      </ThemedText>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <Pressable
+                    onPress={() => setIsLocationPickerVisible(true)}
+                    style={[styles.locationPickButton, { backgroundColor: theme.backgroundElement }]}>
+                    <SymbolView
+                      name={{ ios: 'map.fill', android: 'map', web: 'map' }}
+                      tintColor={theme.text}
+                      size={16}
+                    />
+                    <ThemedText type="small" style={styles.locationPickButtonText}>
+                      Pick Location on Map
+                    </ThemedText>
+                  </Pressable>
+                )}
               </Field>
 
               <Field label="Amenities (comma-separated)">
@@ -759,6 +863,15 @@ export default function ListingFormScreen() {
           </ThemedView>
         </View>
       </Modal>
+
+      <LocationPickerModal
+        visible={isLocationPickerVisible}
+        onClose={() => setIsLocationPickerVisible(false)}
+        onConfirm={handleConfirmLocation}
+        initialLatitude={latitude}
+        initialLongitude={longitude}
+        initialAddress={locationText || null}
+      />
     </ThemedView>
   );
 }
@@ -768,11 +881,13 @@ function Field({
   children,
   style,
   action,
+  error,
 }: {
   label: string;
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   action?: ReactNode;
+  error?: string;
 }) {
   return (
     <View style={[styles.field, style]}>
@@ -783,6 +898,7 @@ function Field({
         {action}
       </View>
       {children}
+      {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
     </View>
   );
 }
@@ -870,6 +986,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  locationPickButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    height: 48,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Spacing.three,
+  },
+  locationPickButtonText: {
+    fontWeight: '600',
+  },
+  locationPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    padding: Spacing.three,
+    borderRadius: Spacing.three,
+  },
+  locationPreviewText: {
+    flex: 1,
+  },
+  locationRepickText: {
+    fontWeight: '600',
   },
   enhanceButton: {
     flexDirection: 'row',
