@@ -6,6 +6,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import type { Listing } from '@/services/listings';
+import { getShortLocation } from '@/utils/format-location';
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -59,7 +60,7 @@ export function ListingCard({ listing, onPress, isFavorited, onToggleFavorite }:
           {listing.title}
         </ThemedText>
         <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.location}>
-          {listing.location_text}
+          {getShortLocation(listing.location_text)}
         </ThemedText>
         <View style={styles.priceRow}>
           <ThemedText style={styles.price}>{priceFormatter.format(listing.price)}</ThemedText>

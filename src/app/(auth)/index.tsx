@@ -1,3 +1,4 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { Link, useRouter } from 'expo-router';
 import { ImageBackground, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,8 +13,11 @@ export default function WelcomeScreen() {
       source={require('@/assets/images/welcome-hero.jpg')}
       style={styles.background}
       resizeMode="cover">
-      <View style={styles.scrim} />
-      <View style={styles.footerScrim} />
+      <LinearGradient
+        style={StyleSheet.absoluteFill}
+        colors={['rgba(0,0,0,0.45)', 'rgba(0,0,0,0.1)', 'rgba(0,0,0,0.6)']}
+        locations={[0, 0.4, 1]}
+      />
       <SafeAreaView style={styles.safeArea} edges={['bottom']}>
         <View style={styles.content}>
           <View style={styles.textBlock}>
@@ -45,18 +49,6 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   background: {
     flex: 1,
-  },
-  scrim: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-  },
-  footerScrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: '55%',
-    backgroundColor: 'rgba(0,0,0,0.45)',
   },
   safeArea: {
     flex: 1,

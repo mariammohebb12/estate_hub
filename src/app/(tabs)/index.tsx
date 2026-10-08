@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CategoryTabBar } from '@/components/category-tab-bar';
 import { ErrorState } from '@/components/error-state';
 import { FilterModal } from '@/components/filter-modal';
 import { ListingCard } from '@/components/listing-card';
@@ -17,8 +18,9 @@ import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
 import { useMode } from '@/providers/mode-provider';
 import { applyAiSearchFilters, parseSearchQuery, type ParsedSearchFilters } from '@/services/ai-search';
-import { getFavoritedListingIds } from '@/services/favorites';
-import { getAvailableListings, type Listing, type ListingFilters } from '@/services/listings';
+import { getFavoritedListingIds, getFavoritedListings } from '@/services/favorites';
+import { getAvailableListings, type Listing, type ListingFilters, type PropertyType } from '@/services/listings';
+import { getRecommendedListings } from '@/services/recommendations';
 import { getFriendlyErrorMessage } from '@/utils/error-message';
 
 function countActiveFilters(filters: ListingFilters) {
@@ -63,6 +65,7 @@ function BuyerFeed() {
   const tabBarClearance = useTabBarClearance();
 
   const [listings, setListings] = useState<Listing[]>([]);
+  const [favoritedListings, setFavoritedListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -88,6 +91,8 @@ function BuyerFeed() {
     if (userId) {
       const { data: favoriteIds } = await getFavoritedListingIds(userId);
       setFavoritedIds(new Set(favoriteIds));
+      const { data: favoriteListings } = await getFavoritedListings(userId);
+      setFavoritedListings(favoriteListings);
     }
   }, [userId, setFavoritedIds, filters]);
 
@@ -110,6 +115,10 @@ function BuyerFeed() {
   const handleApplyFilters = (nextFilters: ListingFilters) => {
     setFilters(nextFilters);
     setIsFilterModalVisible(false);
+  };
+
+  const handleSelectCategory = (propertyType: PropertyType | undefined) => {
+    setFilters((prev) => ({ ...prev, propertyType }));
   };
 
   const handleAiSearch = async () => {
@@ -143,6 +152,15 @@ function BuyerFeed() {
   const displayedListings = useMemo(
     () => (aiFilters ? applyAiSearchFilters(listings, aiFilters) : listings),
     [listings, aiFilters],
+  );
+
+  // "All Listings" intentionally repeats items already surfaced above in
+  // "Recommended for You" rather than excluding them — with only a handful of
+  // listings in the catalog, excluding recommended items left the grid empty
+  // right after a populated Recommended section.
+  const recommendedListings = useMemo(
+    () => getRecommendedListings(displayedListings, favoritedListings),
+    [displayedListings, favoritedListings],
   );
 
   return (
@@ -207,6 +225,10 @@ function BuyerFeed() {
           ) : null}
         </View>
 
+        <View style={styles.categoryTabBar}>
+          <CategoryTabBar selected={filters.propertyType} onSelect={handleSelectCategory} />
+        </View>
+
         <FilterModal
           visible={isFilterModalVisible}
           filters={filters}
@@ -235,6 +257,21 @@ function BuyerFeed() {
             numColumns={2}
             columnWrapperStyle={styles.row}
             contentContainerStyle={[styles.listContent, { paddingBottom: Spacing.five + tabBarClearance }]}
+            ListHeaderComponent={
+              <View>
+                {recommendedListings.length > 0 ? (
+                  <RecommendedSection
+                    listings={recommendedListings}
+                    favoritedIds={favoritedIds}
+                    onPressListing={(id) => router.push(`/listing/${id}`)}
+                    onToggleFavorite={toggleFavorite}
+                  />
+                ) : null}
+                <ThemedText type="subtitle" style={styles.sectionTitle}>
+                  All Listings
+                </ThemedText>
+              </View>
+            }
             renderItem={({ item }) => (
               <ListingCard
                 listing={item}
@@ -248,6 +285,40 @@ function BuyerFeed() {
         )}
       </SafeAreaView>
     </ThemedView>
+  );
+}
+
+type RecommendedSectionProps = {
+  listings: Listing[];
+  favoritedIds: Set<string>;
+  onPressListing: (id: string) => void;
+  onToggleFavorite: (id: string) => void;
+};
+
+function RecommendedSection({ listings, favoritedIds, onPressListing, onToggleFavorite }: RecommendedSectionProps) {
+  return (
+    <View style={styles.recommendedSection}>
+      <ThemedText type="subtitle" style={styles.recommendedTitle}>
+        Recommended for You
+      </ThemedText>
+      <FlatList
+        horizontal
+        data={listings}
+        keyExtractor={(item) => item.id}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.recommendedListContent}
+        renderItem={({ item }) => (
+          <View style={styles.recommendedCard}>
+            <ListingCard
+              listing={item}
+              onPress={() => onPressListing(item.id)}
+              isFavorited={favoritedIds.has(item.id)}
+              onToggleFavorite={() => onToggleFavorite(item.id)}
+            />
+          </View>
+        )}
+      />
+    </View>
   );
 }
 
@@ -293,6 +364,28 @@ const styles = StyleSheet.create({
   },
   aiSearchErrorText: {
     color: '#D92D20',
+  },
+  categoryTabBar: {
+    paddingBottom: Spacing.three,
+  },
+  recommendedSection: {
+    paddingBottom: Spacing.four,
+    gap: Spacing.three,
+  },
+  recommendedTitle: {
+    fontSize: 20,
+    lineHeight: 25,
+  },
+  recommendedListContent: {
+    gap: Spacing.three,
+  },
+  recommendedCard: {
+    width: 180,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    lineHeight: 25,
+    paddingBottom: Spacing.two,
   },
   filterButton: {
     flexDirection: 'row',

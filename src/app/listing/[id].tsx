@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView, type AndroidSymbol } from 'expo-symbols';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SFSymbol } from 'sf-symbols-typescript';
 import {
   ActivityIndicator,
@@ -16,6 +16,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
+import MapView, { Marker } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DateRangeCalendar, dateCoveredBySlot, isSameDay, startOfMonth } from '@/components/date-range-calendar';
@@ -26,7 +27,7 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/providers/auth-provider';
 import { useToast } from '@/providers/toast-provider';
-import { bookSlot, getAvailableSlots, type AvailabilitySlot } from '@/services/bookings';
+import { bookRentalRange, bookSlot, getAvailableSlots, type AvailabilitySlot } from '@/services/bookings';
 import { addFavorite, getFavoritedListingIds, removeFavorite } from '@/services/favorites';
 import { getListingPhotos, type ListingPhoto } from '@/services/listing-photos';
 import { getListingById, type ListingDetail } from '@/services/listings';
@@ -69,6 +70,17 @@ function formatSlotLabel(slot: AvailabilitySlot) {
   return `${slotDateFormatter.format(start)}, ${slotTimeFormatter.format(start)}–${slotTimeFormatter.format(end)}`;
 }
 
+// Applies the hour/minute from a listing's slot boundary (the seller's
+// configured check-in/check-out time) onto a buyer-picked calendar day, so a
+// booked sub-range keeps the same check-in/check-out schedule as the
+// original slot it was carved from.
+function applyTimeOfDay(date: Date, referenceIso: string) {
+  const reference = new Date(referenceIso);
+  const result = new Date(date);
+  result.setHours(reference.getHours(), reference.getMinutes(), 0, 0);
+  return result;
+}
+
 const rangeDateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
 
 type TagIcon = { ios: SFSymbol; android: AndroidSymbol };
@@ -101,6 +113,19 @@ function getAmenityIcon(amenity: string): TagIcon {
   return AMENITY_ICON_RULES.find(({ match }) => match.test(amenity))?.icon ?? DEFAULT_AMENITY_ICON;
 }
 
+type DetailTab = 'overview' | 'availability';
+
+const DETAIL_TABS: { key: DetailTab; label: string }[] = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'availability', label: 'Availability' },
+];
+
+const photoItemLayout = (_: unknown, index: number) => ({
+  length: screenWidth,
+  offset: screenWidth * index,
+  index,
+});
+
 export default function ListingDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -119,6 +144,10 @@ export default function ListingDetailScreen() {
 
   const [photos, setPhotos] = useState<ListingPhoto[]>([]);
   const [activePhotoIndex, setActivePhotoIndex] = useState(0);
+  const photoListRef = useRef<FlatList<ListingPhoto>>(null);
+
+  const [activeTab, setActiveTab] = useState<DetailTab>('overview');
+  const scrollRef = useRef<ScrollView>(null);
 
   const [slots, setSlots] = useState<AvailabilitySlot[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
@@ -252,7 +281,19 @@ export default function ListingDetailScreen() {
     setBookingError(null);
 
     const bookedSlot = slots.find((slot) => slot.id === selectedSlotId) ?? null;
-    const { error } = await bookSlot({ slotId: selectedSlotId, listingId: id, buyerId: userId });
+    const isRentRange = listing?.listing_type === 'rent' && bookedSlot != null && rangeStart != null && rangeEnd != null;
+
+    const rentRangeStartIso = isRentRange ? applyTimeOfDay(rangeStart!, bookedSlot!.start_time).toISOString() : null;
+    const rentRangeEndIso = isRentRange ? applyTimeOfDay(rangeEnd!, bookedSlot!.end_time).toISOString() : null;
+
+    const { error } = isRentRange
+      ? await bookRentalRange({
+          slotId: selectedSlotId,
+          buyerId: userId,
+          rangeStart: rentRangeStartIso!,
+          rangeEnd: rentRangeEndIso!,
+        })
+      : await bookSlot({ slotId: selectedSlotId, listingId: id, buyerId: userId });
 
     if (error) {
       if (error === 'slot_taken') {
@@ -272,10 +313,15 @@ export default function ListingDetailScreen() {
         setBookingError(getFriendlyErrorMessage(error));
       }
     } else {
-      setConfirmedSlot(bookedSlot);
+      setConfirmedSlot(
+        isRentRange && bookedSlot
+          ? { ...bookedSlot, start_time: rentRangeStartIso!, end_time: rentRangeEndIso! }
+          : bookedSlot,
+      );
       setSelectedSlotId(null);
       setRangeStart(null);
       setRangeEnd(null);
+      await loadSlots();
     }
 
     setIsBooking(false);
@@ -297,14 +343,30 @@ export default function ListingDetailScreen() {
   };
 
   const handleOpenMaps = async () => {
-    if (!listing?.location_text) return;
-    const query = encodeURIComponent(listing.location_text);
-    const webFallbackUrl = `https://www.google.com/maps/search/?api=1&query=${query}`;
-    const url = Platform.select({
-      ios: `maps://?q=${query}`,
-      android: `geo:0,0?q=${query}`,
-      default: webFallbackUrl,
-    });
+    const { latitude, longitude, location_text } = listing ?? {};
+    if (latitude == null && longitude == null && !location_text) return;
+
+    const label = location_text ? encodeURIComponent(location_text) : '';
+    let url: string;
+    let webFallbackUrl: string;
+
+    if (latitude != null && longitude != null) {
+      webFallbackUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+      url =
+        Platform.select({
+          ios: `maps://?ll=${latitude},${longitude}&q=${label || `${latitude},${longitude}`}`,
+          android: `geo:${latitude},${longitude}?q=${latitude},${longitude}(${label || 'Listing'})`,
+          default: webFallbackUrl,
+        }) ?? webFallbackUrl;
+    } else {
+      webFallbackUrl = `https://www.google.com/maps/search/?api=1&query=${label}`;
+      url =
+        Platform.select({
+          ios: `maps://?q=${label}`,
+          android: `geo:0,0?q=${label}`,
+          default: webFallbackUrl,
+        }) ?? webFallbackUrl;
+    }
 
     try {
       const canOpen = await Linking.canOpenURL(url);
@@ -312,6 +374,16 @@ export default function ListingDetailScreen() {
     } catch (error) {
       console.error('handleOpenMaps: failed to open maps', error);
     }
+  };
+
+  const handleSelectPhoto = (index: number) => {
+    setActivePhotoIndex(index);
+    photoListRef.current?.scrollToIndex({ index, animated: true });
+  };
+
+  const handleSelectTab = (tab: DetailTab) => {
+    setActiveTab(tab);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
 
   const handleCopyPhone = async () => {
@@ -388,17 +460,20 @@ export default function ListingDetailScreen() {
   return (
     <ThemedView style={styles.container}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{ paddingBottom: insets.bottom + Spacing.six + Spacing.four }}
         showsVerticalScrollIndicator={false}>
         <View style={[styles.photo, { backgroundColor: theme.backgroundElement }]}>
           {photos.length > 0 ? (
             <FlatList
+              ref={photoListRef}
               data={photos}
               keyExtractor={(photo) => photo.id}
               style={styles.photoList}
               horizontal
               pagingEnabled
               showsHorizontalScrollIndicator={false}
+              getItemLayout={photoItemLayout}
               onMomentumScrollEnd={(event) => {
                 const index = Math.round(event.nativeEvent.contentOffset.x / screenWidth);
                 setActivePhotoIndex(index);
@@ -431,7 +506,48 @@ export default function ListingDetailScreen() {
           ) : null}
         </View>
 
+        {photos.length > 1 ? (
+          <FlatList
+            data={photos}
+            keyExtractor={(photo) => photo.id}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.thumbStrip}
+            contentContainerStyle={styles.thumbStripContent}
+            renderItem={({ item, index }) => (
+              <Pressable onPress={() => handleSelectPhoto(index)}>
+                <Image
+                  source={{ uri: item.photo_url }}
+                  style={[
+                    styles.thumbImage,
+                    { borderColor: index === activePhotoIndex ? theme.text : 'transparent' },
+                  ]}
+                />
+              </Pressable>
+            )}
+          />
+        ) : null}
+
+        <View style={[styles.tabBar, { borderBottomColor: theme.backgroundElement }]}>
+          {DETAIL_TABS.map((tab) => {
+            const selected = tab.key === activeTab;
+            return (
+              <Pressable key={tab.key} onPress={() => handleSelectTab(tab.key)} style={styles.tabItem}>
+                <ThemedText
+                  type="smallBold"
+                  themeColor={selected ? 'text' : 'textSecondary'}
+                  style={styles.tabLabel}>
+                  {tab.label}
+                </ThemedText>
+                <View style={[styles.tabUnderline, { backgroundColor: selected ? theme.text : 'transparent' }]} />
+              </Pressable>
+            );
+          })}
+        </View>
+
         <ThemedView style={styles.content}>
+          {activeTab === 'overview' ? (
+            <>
           <ThemedView style={styles.titleBlock}>
             <View style={styles.titleRow}>
               <ThemedText type="subtitle" style={styles.titleText}>
@@ -463,7 +579,28 @@ export default function ListingDetailScreen() {
             ) : null}
           </ThemedView>
 
-          {listing.location_text ? (
+          {listing.latitude != null && listing.longitude != null ? (
+            <Pressable
+              onPress={handleOpenMaps}
+              style={({ pressed }) => [styles.mapPreviewCard, pressed && styles.mapCardPressed]}>
+              <MapView
+                style={styles.mapPreview}
+                pointerEvents="none"
+                initialRegion={{
+                  latitude: listing.latitude,
+                  longitude: listing.longitude,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                }}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                rotateEnabled={false}
+                pitchEnabled={false}
+                toolbarEnabled={false}>
+                <Marker coordinate={{ latitude: listing.latitude, longitude: listing.longitude }} />
+              </MapView>
+            </Pressable>
+          ) : listing.location_text ? (
             <Pressable
               onPress={handleOpenMaps}
               style={({ pressed }) => [
@@ -541,133 +678,154 @@ export default function ListingDetailScreen() {
             </ThemedView>
           ) : null}
 
-          {listing.listing_type === 'buy' && !confirmedSlot ? (
-            <ThemedView style={styles.section}>
-              <ThemedText type="smallBold">Available viewing times</ThemedText>
-
-              {isLoadingSlots ? (
-                <ActivityIndicator style={styles.slotsSpacing} />
-              ) : slotsError ? (
-                <View style={styles.slotsSpacing}>
-                  <ThemedText style={styles.errorText}>{slotsError}</ThemedText>
-                  <Pressable onPress={loadSlots} hitSlop={8} disabled={isLoadingSlots}>
-                    <ThemedText type="linkPrimary" style={styles.retryLinkText}>
-                      Try again
+          <ThemedView style={styles.section}>
+            <ThemedText type="smallBold">Listed by</ThemedText>
+            <ThemedView
+              style={[styles.agentCard, { backgroundColor: theme.backgroundElement }]}>
+              <View style={[styles.avatar, { backgroundColor: theme.backgroundSelected }]}>
+                {listing.seller_avatar_url ? (
+                  <Image source={{ uri: listing.seller_avatar_url }} style={styles.avatarImage} />
+                ) : listing.seller_full_name ? (
+                  <ThemedText type="smallBold">{getInitials(listing.seller_full_name)}</ThemedText>
+                ) : (
+                  <SymbolView
+                    name={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
+                    tintColor={theme.textSecondary}
+                    size={24}
+                  />
+                )}
+              </View>
+              <ThemedView style={[styles.agentInfo, { backgroundColor: theme.backgroundElement }]}>
+                <ThemedText type="smallBold" numberOfLines={1}>
+                  {listing.seller_full_name ?? 'Seller'}
+                </ThemedText>
+                {listing.seller_phone ? (
+                  <Pressable onPress={() => setIsPhoneSheetVisible(true)} hitSlop={4}>
+                    <ThemedText themeColor="textSecondary" numberOfLines={1}>
+                      Phone number
                     </ThemedText>
                   </Pressable>
-                </View>
-              ) : slots.length === 0 ? (
-                <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
-                  No viewing times available
-                </ThemedText>
-              ) : (
-                <View style={styles.slotsSpacing}>
-                  {bookingError ? (
-                    <ThemedText style={[styles.errorText, styles.slotError]}>{bookingError}</ThemedText>
-                  ) : null}
-                  <DateRangeCalendar
-                    month={calendarMonth}
-                    minMonth={startOfMonth(new Date())}
-                    onMonthChange={setCalendarMonth}
-                    slots={slots}
-                    rangeStart={null}
-                    rangeEnd={null}
-                    onSelectDate={handleSelectDay}
-                  />
-                  {selectedBuySlot ? (
-                    <ThemedText type="small" themeColor="textSecondary" style={styles.slotsSpacing}>
-                      Selected: {formatSlotLabel(selectedBuySlot)}
-                    </ThemedText>
-                  ) : null}
-                </View>
-              )}
-            </ThemedView>
-          ) : null}
-
-          {listing.listing_type === 'rent' && !confirmedSlot ? (
-            <ThemedView style={styles.section}>
-              <ThemedText type="smallBold">Select your dates</ThemedText>
-
-              {isLoadingSlots ? (
-                <ActivityIndicator style={styles.slotsSpacing} />
-              ) : slotsError ? (
-                <View style={styles.slotsSpacing}>
-                  <ThemedText style={styles.errorText}>{slotsError}</ThemedText>
-                  <Pressable onPress={loadSlots} hitSlop={8} disabled={isLoadingSlots}>
-                    <ThemedText type="linkPrimary" style={styles.retryLinkText}>
-                      Try again
-                    </ThemedText>
-                  </Pressable>
-                </View>
-              ) : slots.length === 0 ? (
-                <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
-                  No available dates
-                </ThemedText>
-              ) : (
-                <View style={styles.slotsSpacing}>
-                  {bookingError ? (
-                    <ThemedText style={[styles.errorText, styles.slotError]}>{bookingError}</ThemedText>
-                  ) : null}
-                  <DateRangeCalendar
-                    month={calendarMonth}
-                    minMonth={startOfMonth(new Date())}
-                    onMonthChange={setCalendarMonth}
-                    slots={slots}
-                    rangeStart={rangeStart}
-                    rangeEnd={rangeEnd}
-                    onSelectDate={handleSelectDate}
-                  />
-                  {rangeStart ? (
-                    <ThemedText type="small" themeColor="textSecondary" style={styles.slotsSpacing}>
-                      {rangeEnd
-                        ? `${rangeDateFormatter.format(rangeStart)} – ${rangeDateFormatter.format(rangeEnd)}`
-                        : `${rangeDateFormatter.format(rangeStart)} — pick a checkout date`}
-                    </ThemedText>
-                  ) : null}
-
-                  {rangeStart && rangeEnd ? (
-                    <View style={styles.checkTimesRow}>
-                      <ThemedText type="small" themeColor="textSecondary">
-                        Check-in: 3:00 PM
-                      </ThemedText>
-                      <ThemedText type="small" themeColor="textSecondary">
-                        Check-out: 11:00 AM
-                      </ThemedText>
-                    </View>
-                  ) : null}
-                </View>
-              )}
-            </ThemedView>
-          ) : null}
-
-          <ThemedView
-            style={[styles.agentCard, { backgroundColor: theme.backgroundElement }]}>
-            <View style={[styles.avatar, { backgroundColor: theme.backgroundSelected }]}>
-              {listing.seller_avatar_url ? (
-                <Image source={{ uri: listing.seller_avatar_url }} style={styles.avatarImage} />
-              ) : listing.seller_full_name ? (
-                <ThemedText type="smallBold">{getInitials(listing.seller_full_name)}</ThemedText>
-              ) : (
-                <SymbolView
-                  name={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
-                  tintColor={theme.textSecondary}
-                  size={24}
-                />
-              )}
-            </View>
-            <ThemedView style={[styles.agentInfo, { backgroundColor: theme.backgroundElement }]}>
-              <ThemedText type="smallBold" numberOfLines={1}>
-                {listing.seller_full_name ?? 'Seller'}
-              </ThemedText>
-              {listing.seller_phone ? (
-                <Pressable onPress={() => setIsPhoneSheetVisible(true)} hitSlop={4}>
-                  <ThemedText themeColor="textSecondary" numberOfLines={1}>
-                    Phone number
-                  </ThemedText>
-                </Pressable>
-              ) : null}
+                ) : null}
+              </ThemedView>
             </ThemedView>
           </ThemedView>
+            </>
+          ) : null}
+
+          {activeTab === 'availability' ? (
+            <>
+              {confirmedSlot ? (
+                <View style={[styles.confirmedCard, { backgroundColor: theme.backgroundElement }]}>
+                  <SymbolView
+                    name={{ ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }}
+                    tintColor={theme.text}
+                    size={20}
+                  />
+                  <View style={styles.confirmedInfo}>
+                    <ThemedText type="smallBold">Booking confirmed</ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {formatSlotLabel(confirmedSlot)}
+                    </ThemedText>
+                  </View>
+                </View>
+              ) : listing.listing_type === 'buy' ? (
+                <ThemedView style={styles.section}>
+                  <ThemedText type="smallBold">Available viewing times</ThemedText>
+
+                  {isLoadingSlots ? (
+                    <ActivityIndicator style={styles.slotsSpacing} />
+                  ) : slotsError ? (
+                    <View style={styles.slotsSpacing}>
+                      <ThemedText style={styles.errorText}>{slotsError}</ThemedText>
+                      <Pressable onPress={loadSlots} hitSlop={8} disabled={isLoadingSlots}>
+                        <ThemedText type="linkPrimary" style={styles.retryLinkText}>
+                          Try again
+                        </ThemedText>
+                      </Pressable>
+                    </View>
+                  ) : slots.length === 0 ? (
+                    <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
+                      No viewing times available
+                    </ThemedText>
+                  ) : (
+                    <View style={styles.slotsSpacing}>
+                      {bookingError ? (
+                        <ThemedText style={[styles.errorText, styles.slotError]}>{bookingError}</ThemedText>
+                      ) : null}
+                      <DateRangeCalendar
+                        month={calendarMonth}
+                        minMonth={startOfMonth(new Date())}
+                        onMonthChange={setCalendarMonth}
+                        slots={slots}
+                        rangeStart={null}
+                        rangeEnd={null}
+                        onSelectDate={handleSelectDay}
+                      />
+                      {selectedBuySlot ? (
+                        <ThemedText type="small" themeColor="textSecondary" style={styles.slotsSpacing}>
+                          Selected: {formatSlotLabel(selectedBuySlot)}
+                        </ThemedText>
+                      ) : null}
+                    </View>
+                  )}
+                </ThemedView>
+              ) : (
+                <ThemedView style={styles.section}>
+                  <ThemedText type="smallBold">Select your dates</ThemedText>
+
+                  {isLoadingSlots ? (
+                    <ActivityIndicator style={styles.slotsSpacing} />
+                  ) : slotsError ? (
+                    <View style={styles.slotsSpacing}>
+                      <ThemedText style={styles.errorText}>{slotsError}</ThemedText>
+                      <Pressable onPress={loadSlots} hitSlop={8} disabled={isLoadingSlots}>
+                        <ThemedText type="linkPrimary" style={styles.retryLinkText}>
+                          Try again
+                        </ThemedText>
+                      </Pressable>
+                    </View>
+                  ) : slots.length === 0 ? (
+                    <ThemedText themeColor="textSecondary" style={styles.slotsSpacing}>
+                      No available dates
+                    </ThemedText>
+                  ) : (
+                    <View style={styles.slotsSpacing}>
+                      {bookingError ? (
+                        <ThemedText style={[styles.errorText, styles.slotError]}>{bookingError}</ThemedText>
+                      ) : null}
+                      <DateRangeCalendar
+                        month={calendarMonth}
+                        minMonth={startOfMonth(new Date())}
+                        onMonthChange={setCalendarMonth}
+                        slots={slots}
+                        rangeStart={rangeStart}
+                        rangeEnd={rangeEnd}
+                        onSelectDate={handleSelectDate}
+                      />
+                      {rangeStart ? (
+                        <ThemedText type="small" themeColor="textSecondary" style={styles.slotsSpacing}>
+                          {rangeEnd
+                            ? `${rangeDateFormatter.format(rangeStart)} – ${rangeDateFormatter.format(rangeEnd)}`
+                            : `${rangeDateFormatter.format(rangeStart)} — pick a checkout date`}
+                        </ThemedText>
+                      ) : null}
+
+                      {rangeStart && rangeEnd ? (
+                        <View style={styles.checkTimesRow}>
+                          <ThemedText type="small" themeColor="textSecondary">
+                            Check-in: 3:00 PM
+                          </ThemedText>
+                          <ThemedText type="small" themeColor="textSecondary">
+                            Check-out: 11:00 AM
+                          </ThemedText>
+                        </View>
+                      ) : null}
+                    </View>
+                  )}
+                </ThemedView>
+              )}
+            </>
+          ) : null}
         </ThemedView>
       </ScrollView>
 
@@ -692,7 +850,7 @@ export default function ListingDetailScreen() {
               </Pressable>
             </View>
             <View style={[styles.phoneRow, { backgroundColor: theme.backgroundElement }]}>
-              <ThemedText type="subtitle" style={styles.phoneText} numberOfLines={1}>
+              <ThemedText type="default" style={styles.phoneText} numberOfLines={1}>
                 {listing.seller_phone}
               </ThemedText>
               <Pressable onPress={handleCopyPhone} hitSlop={8}>
@@ -774,8 +932,19 @@ export default function ListingDetailScreen() {
       <ThemedView
         style={[
           styles.ctaBar,
-          { paddingBottom: insets.bottom + Spacing.two, backgroundColor: theme.background },
+          { paddingBottom: insets.bottom + Spacing.two, backgroundColor: theme.background, borderTopColor: theme.backgroundElement },
         ]}>
+        <View style={styles.ctaPriceBlock}>
+          <ThemedText style={styles.ctaPriceText} numberOfLines={1}>
+            {priceFormatter.format(listing.price)}
+            {listing.listing_type === 'rent' ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                {' '}
+                / night
+              </ThemedText>
+            ) : null}
+          </ThemedText>
+        </View>
         {confirmedSlot ? (
           <View style={[styles.ctaButton, styles.ctaSuccess]}>
             <SymbolView
@@ -826,6 +995,9 @@ const styles = StyleSheet.create({
   },
   phoneText: {
     flex: 1,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '600',
   },
   centered: {
     flex: 1,
@@ -898,6 +1070,49 @@ const styles = StyleSheet.create({
   photoDotInactive: {
     opacity: 0.4,
   },
+  thumbStrip: {
+    flexGrow: 0,
+  },
+  thumbStripContent: {
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.three,
+    gap: Spacing.two,
+  },
+  thumbImage: {
+    width: 56,
+    height: 56,
+    borderRadius: Spacing.two,
+    borderWidth: 2,
+  },
+  tabBar: {
+    flexDirection: 'row',
+    marginTop: Spacing.four,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingTop: Spacing.one,
+  },
+  tabLabel: {
+    paddingBottom: Spacing.two,
+  },
+  tabUnderline: {
+    width: '100%',
+    height: 2,
+    borderRadius: 1,
+  },
+  confirmedCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    padding: Spacing.three,
+    borderRadius: Spacing.three,
+  },
+  confirmedInfo: {
+    gap: Spacing.half,
+  },
   content: {
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.four,
@@ -916,8 +1131,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   price: {
-    fontSize: 24,
-    lineHeight: 30,
+    fontSize: 28,
+    lineHeight: 34,
   },
   mapCard: {
     flexDirection: 'row',
@@ -939,6 +1154,14 @@ const styles = StyleSheet.create({
   mapCardInfo: {
     flex: 1,
     gap: Spacing.half,
+  },
+  mapPreviewCard: {
+    height: 160,
+    borderRadius: Spacing.three,
+    overflow: 'hidden',
+  },
+  mapPreview: {
+    flex: 1,
   },
   tileGrid: {
     flexDirection: 'row',
@@ -1009,11 +1232,25 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  ctaPriceBlock: {
+    flex: 1,
+  },
+  ctaPriceText: {
+    fontSize: 22,
+    lineHeight: 26,
+    fontWeight: '700',
   },
   ctaButton: {
     height: 52,
+    minWidth: 160,
+    paddingHorizontal: Spacing.four,
     borderRadius: Spacing.three,
     backgroundColor: '#000000',
     alignItems: 'center',

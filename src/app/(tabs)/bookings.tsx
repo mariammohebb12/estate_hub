@@ -14,6 +14,7 @@ import { useAuth } from '@/providers/auth-provider';
 import { useMode } from '@/providers/mode-provider';
 import { getBookingsOnMyListings, getMyBookings, type BookingRow } from '@/services/bookings';
 import { getFriendlyErrorMessage } from '@/utils/error-message';
+import { getShortLocation } from '@/utils/format-location';
 
 const dateFormatter = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const timeFormatter = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -164,7 +165,7 @@ export default function BookingsScreen() {
                     </ThemedText>
                     {item.listings?.location_text ? (
                       <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-                        {item.listings.location_text}
+                        {getShortLocation(item.listings.location_text)}
                       </ThemedText>
                     ) : null}
                     <View style={styles.badgeRow}>
@@ -251,7 +252,7 @@ export default function BookingsScreen() {
                     </ThemedText>
                     {selectedBooking.listings?.location_text ? (
                       <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-                        {selectedBooking.listings.location_text}
+                        {getShortLocation(selectedBooking.listings.location_text)}
                       </ThemedText>
                     ) : null}
                     <View style={styles.badgeRow}>

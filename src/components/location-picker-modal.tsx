@@ -1,7 +1,7 @@
 import * as Location from 'expo-location';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import MapView, { Marker, type MapPressEvent, type MarkerDragStartEndEvent, type Region } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -19,8 +19,13 @@ const DEFAULT_REGION: Region = {
 };
 
 const PIN_REGION_DELTA = 0.01;
+const SEARCH_BAR_HEIGHT = 48;
+const SUGGESTIONS_DEBOUNCE_MS = 400;
+const MIN_SUGGESTIONS_QUERY_LENGTH = 3;
 
 type LatLng = { latitude: number; longitude: number };
+
+type PlaceSuggestion = { id: string; label: string; coordinate: LatLng };
 
 export type LocationPickerResult = { address: string; latitude: number; longitude: number };
 
@@ -52,6 +57,34 @@ async function reverseGeocode(latitude: number, longitude: number): Promise<{ ad
   }
 }
 
+async function searchPlaces(query: string, limit: number): Promise<{ results: PlaceSuggestion[]; error: string | null }> {
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&limit=${limit}`;
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      return { results: [], error: "Couldn't search for that place." };
+    }
+    const data = await response.json();
+    if (!Array.isArray(data)) {
+      return { results: [], error: null };
+    }
+    const results: PlaceSuggestion[] = data
+      .map((item): PlaceSuggestion | null => {
+        const latitude = Number.parseFloat(item?.lat);
+        const longitude = Number.parseFloat(item?.lon);
+        const label = typeof item?.display_name === 'string' ? item.display_name : null;
+        if (!label || Number.isNaN(latitude) || Number.isNaN(longitude)) return null;
+        const id = item?.place_id != null ? String(item.place_id) : `${latitude},${longitude}`;
+        return { id, label, coordinate: { latitude, longitude } };
+      })
+      .filter((item): item is PlaceSuggestion => item !== null);
+    return { results, error: null };
+  } catch (error) {
+    console.error('searchPlaces: request failed', error);
+    return { results: [], error: getFriendlyErrorMessage(error) };
+  }
+}
+
 export function LocationPickerModal({
   visible,
   onClose,
@@ -63,6 +96,8 @@ export function LocationPickerModal({
   const theme = useTheme();
   const mapRef = useRef<MapView>(null);
   const requestIdRef = useRef(0);
+  const suggestionsRequestIdRef = useRef(0);
+  const justSelectedRef = useRef(false);
 
   const [marker, setMarker] = useState<LatLng | null>(null);
   const [isLocating, setIsLocating] = useState(false);
@@ -71,11 +106,23 @@ export function LocationPickerModal({
   const [isResolvingAddress, setIsResolvingAddress] = useState(false);
   const [addressError, setAddressError] = useState<string | null>(null);
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
   useEffect(() => {
     if (!visible) return;
 
     setPermissionDenied(false);
     setAddressError(null);
+    setSearchQuery('');
+    setSearchError(null);
+    setSuggestions([]);
+    setIsSuggestionsLoading(false);
+    setIsDropdownOpen(false);
 
     if (initialLatitude != null && initialLongitude != null) {
       setMarker({ latitude: initialLatitude, longitude: initialLongitude });
@@ -136,6 +183,88 @@ export function LocationPickerModal({
     setResolvedAddress(address);
   };
 
+  useEffect(() => {
+    const query = searchQuery.trim();
+
+    if (justSelectedRef.current) {
+      justSelectedRef.current = false;
+      return;
+    }
+
+    if (query.length < MIN_SUGGESTIONS_QUERY_LENGTH) {
+      setSuggestions([]);
+      setIsSuggestionsLoading(false);
+      return;
+    }
+
+    setIsSuggestionsLoading(true);
+    const timeoutId = setTimeout(async () => {
+      const requestId = ++suggestionsRequestIdRef.current;
+      const { results, error } = await searchPlaces(query, 5);
+      if (suggestionsRequestIdRef.current !== requestId) return;
+      setIsSuggestionsLoading(false);
+      setSuggestions(error ? [] : results);
+    }, SUGGESTIONS_DEBOUNCE_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery]);
+
+  const applySelection = (coordinate: LatLng, label: string) => {
+    justSelectedRef.current = true;
+    setIsDropdownOpen(false);
+    setSuggestions([]);
+    setSearchQuery(label);
+
+    mapRef.current?.animateToRegion(
+      {
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+        latitudeDelta: PIN_REGION_DELTA,
+        longitudeDelta: PIN_REGION_DELTA,
+      },
+      300,
+    );
+    setMarkerAndResolve(coordinate);
+  };
+
+  const handleChangeSearchQuery = (text: string) => {
+    setSearchQuery(text);
+    setSearchError(null);
+    setIsDropdownOpen(true);
+  };
+
+  const handleSelectSuggestion = (suggestion: PlaceSuggestion) => {
+    setSearchError(null);
+    applySelection(suggestion.coordinate, suggestion.label);
+  };
+
+  const handleSearch = async () => {
+    const query = searchQuery.trim();
+    if (!query) return;
+
+    setIsDropdownOpen(false);
+    setIsSearching(true);
+    setSearchError(null);
+
+    const { results, error } = await searchPlaces(query, 1);
+    setIsSearching(false);
+
+    const top = results[0];
+    if (error || !top) {
+      setSearchError(error ?? 'No matching location found. Try a different search.');
+      return;
+    }
+
+    applySelection(top.coordinate, top.label);
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setSearchError(null);
+    setSuggestions([]);
+    setIsDropdownOpen(false);
+  };
+
   const handleMapPress = (event: MapPressEvent) => {
     setMarkerAndResolve(event.nativeEvent.coordinate);
   };
@@ -185,6 +314,91 @@ export function LocationPickerModal({
             <MapView ref={mapRef} style={styles.map} initialRegion={initialRegion} onPress={handleMapPress}>
               {marker ? <Marker coordinate={marker} draggable onDragEnd={handleMarkerDragEnd} /> : null}
             </MapView>
+
+            <View style={styles.searchOverlay}>
+              <View style={[styles.searchBar, { backgroundColor: theme.background }]}>
+                <SymbolView
+                  name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
+                  tintColor={theme.textSecondary}
+                  size={18}
+                />
+                <TextInput
+                  placeholder="Search for a place or address"
+                  placeholderTextColor={theme.textSecondary}
+                  value={searchQuery}
+                  onChangeText={handleChangeSearchQuery}
+                  onSubmitEditing={handleSearch}
+                  returnKeyType="search"
+                  editable={!isSearching}
+                  style={[styles.searchInput, { color: theme.text }]}
+                />
+                {isSearching || isSuggestionsLoading ? (
+                  <ActivityIndicator size="small" color={theme.textSecondary} />
+                ) : searchQuery ? (
+                  <Pressable onPress={handleClearSearch} hitSlop={8}>
+                    <SymbolView
+                      name={{ ios: 'xmark.circle.fill', android: 'close', web: 'close' }}
+                      tintColor={theme.textSecondary}
+                      size={18}
+                    />
+                  </Pressable>
+                ) : null}
+              </View>
+
+              {isDropdownOpen && searchQuery.trim().length >= MIN_SUGGESTIONS_QUERY_LENGTH ? (
+                <View style={[styles.suggestionsCard, { backgroundColor: theme.background }]}>
+                  {isSuggestionsLoading ? (
+                    <View style={styles.suggestionsStatusRow}>
+                      <ActivityIndicator size="small" color={theme.textSecondary} />
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Searching…
+                      </ThemedText>
+                    </View>
+                  ) : suggestions.length > 0 ? (
+                    <ScrollView
+                      keyboardShouldPersistTaps="always"
+                      style={styles.suggestionsList}
+                      nestedScrollEnabled>
+                      {suggestions.map((suggestion, index) => (
+                        <Pressable
+                          key={suggestion.id}
+                          onPress={() => handleSelectSuggestion(suggestion)}
+                          style={[
+                            styles.suggestionRow,
+                            index !== suggestions.length - 1 && {
+                              borderBottomWidth: StyleSheet.hairlineWidth,
+                              borderBottomColor: theme.backgroundElement,
+                            },
+                          ]}>
+                          <SymbolView
+                            name={{ ios: 'mappin.and.ellipse', android: 'location_on', web: 'location_on' }}
+                            tintColor={theme.textSecondary}
+                            size={16}
+                          />
+                          <ThemedText type="small" style={styles.suggestionLabel} numberOfLines={2}>
+                            {suggestion.label}
+                          </ThemedText>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  ) : (
+                    <View style={styles.suggestionsStatusRow}>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        No matching places found.
+                      </ThemedText>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+
+              {searchError ? (
+                <View style={[styles.searchErrorBar, { backgroundColor: theme.background }]}>
+                  <ThemedText type="small" style={styles.searchErrorText}>
+                    {searchError}
+                  </ThemedText>
+                </View>
+              ) : null}
+            </View>
 
             {isLocating ? (
               <View style={[styles.recenterButton, { backgroundColor: theme.background }]}>
@@ -274,9 +488,77 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
-  recenterButton: {
+  searchOverlay: {
     position: 'absolute',
     top: Spacing.three,
+    left: Spacing.three,
+    right: Spacing.three,
+    gap: Spacing.two,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    height: SEARCH_BAR_HEIGHT,
+    borderRadius: Spacing.five,
+    paddingHorizontal: Spacing.three,
+    shadowColor: '#000000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    height: '100%',
+  },
+  suggestionsCard: {
+    borderRadius: Spacing.three,
+    overflow: 'hidden',
+    maxHeight: 260,
+    shadowColor: '#000000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  suggestionsList: {
+    flexGrow: 0,
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+  },
+  suggestionLabel: {
+    flex: 1,
+  },
+  suggestionsStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+  },
+  searchErrorBar: {
+    borderRadius: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    shadowColor: '#000000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  searchErrorText: {
+    color: '#D92D20',
+  },
+  recenterButton: {
+    position: 'absolute',
+    top: Spacing.three + SEARCH_BAR_HEIGHT + Spacing.two,
     right: Spacing.three,
     width: 40,
     height: 40,
